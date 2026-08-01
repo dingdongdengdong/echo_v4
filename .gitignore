@@ -1,4 +1,8 @@
 .idea/
+.local/
+.pytest_cache/
+.ruff_cache/
+.venv/
 __MACOSX/
 .DS_Store
 *pycache*

@@ -1,0 +1,62 @@
+[build-system]
+requires = ["setuptools>=71", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "lerobot_robot_roboparty"
+version = "0.1.0"
+description = "LeRobot integration for the Roboparty right arm and Quest WebXR teleoperation"
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "Apache-2.0" }
+dependencies = [
+  "lerobot[dataset]>=0.6.1,<0.7",
+  "numpy>=2.0,<2.3",
+  # vuer 0.0.60 imports the legacy Flag/Proto API removed in params-proto 2.13.2.
+  "params-proto>=2.13,<2.13.2",
+  "vuer[all]==0.0.60",
+]
+
+[project.optional-dependencies]
+hardware = [
+  "motorbridge>=0.3.2,<0.4.0",
+  "python-can>=4.2,<5.0",
+  "pyserial>=3.5,<4.0",
+]
+kinematics = [
+  # Pin 3.7 macOS wheels are linked against urdfdom 4.x.
+  "cmeel-urdfdom>=4,<5; platform_system == 'Darwin'",
+  "cmeel-tinyxml2>=10,<11; platform_system == 'Darwin'",
+  "pin>=3.7,<3.8",
+]
+test = [
+  "pytest>=8,<10",
+  "ruff>=0.11,<1",
+]
+
+[project.scripts]
+roboparty-teleoperate = "lerobot_robot_roboparty.cli:teleoperate_main"
+roboparty-record = "lerobot_robot_roboparty.cli:record_main"
+roboparty-quest-check = "lerobot_robot_roboparty.quest_check:main"
+roboparty-can-probe = "lerobot_robot_roboparty.can_probe:main"
+roboparty-calibrate-two-motors = "lerobot_robot_roboparty.two_motor_calibration:main"
+roboparty-quest-two-motor-check = "lerobot_robot_roboparty.two_motor_quest_check:main"
+roboparty-quest-two-motor-teleop = "lerobot_robot_roboparty.two_motor_quest_teleop:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["lerobot_robot_roboparty*", "televuer*"]
+
+[tool.ruff]
+line-length = 110
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = [".", "../lerobot/src"]
+
+[tool.uv.sources]
+lerobot = { path = "../lerobot", editable = true }

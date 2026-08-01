@@ -1,12 +1,13 @@
 # Modified from Unitree xr_teleoperate for RPO robot teleoperation.
-from vuer import Vuer
-from vuer.schemas import ImageBackground, Hands, MotionControllers, WebRTCVideoPlane, WebRTCStereoVideoPlane
-from multiprocessing import Value, Array, Process, shared_memory
-import numpy as np
+# ruff: noqa: E501
 import asyncio
-import cv2
-import os
+import multiprocessing
+import time
 from pathlib import Path
+
+import numpy as np
+from vuer import Vuer
+from vuer.schemas import Hands, ImageBackground, MotionControllers
 
 
 class TeleVuer:
@@ -48,44 +49,50 @@ class TeleVuer:
 
         self.vuer.spawn(start=False)(self.main_image_binocular)
 
-        self.head_pose_shared = Array('d', 16, lock=True)
-        self.left_arm_pose_shared = Array('d', 16, lock=True)
-        self.right_arm_pose_shared = Array('d', 16, lock=True)
+        # macOS defaults to the ``spawn`` multiprocessing method. Vuer contains
+        # params-proto state that cannot be pickled, so spawn fails before the
+        # HTTPS server starts. Fork is also the method used by the original
+        # Linux deployment and keeps the Vuer object in inherited memory.
+        self._mp_context = multiprocessing.get_context("fork")
+        self.head_pose_shared = self._mp_context.Array('d', 16, lock=True)
+        self.left_arm_pose_shared = self._mp_context.Array('d', 16, lock=True)
+        self.right_arm_pose_shared = self._mp_context.Array('d', 16, lock=True)
+        self.controller_event_time_ns_shared = self._mp_context.Value('q', 0, lock=True)
         if self.use_hand_tracking:
-            self.left_hand_position_shared = Array('d', 75, lock=True)
-            self.right_hand_position_shared = Array('d', 75, lock=True)
-            self.left_hand_orientation_shared = Array('d', 25 * 9, lock=True)
-            self.right_hand_orientation_shared = Array('d', 25 * 9, lock=True)
+            self.left_hand_position_shared = self._mp_context.Array('d', 75, lock=True)
+            self.right_hand_position_shared = self._mp_context.Array('d', 75, lock=True)
+            self.left_hand_orientation_shared = self._mp_context.Array('d', 25 * 9, lock=True)
+            self.right_hand_orientation_shared = self._mp_context.Array('d', 25 * 9, lock=True)
 
-            self.left_pinch_state_shared = Value('b', False, lock=True)
-            self.left_pinch_value_shared = Value('d', 0.0, lock=True)
-            self.left_squeeze_state_shared = Value('b', False, lock=True)
-            self.left_squeeze_value_shared = Value('d', 0.0, lock=True)
+            self.left_pinch_state_shared = self._mp_context.Value('b', False, lock=True)
+            self.left_pinch_value_shared = self._mp_context.Value('d', 0.0, lock=True)
+            self.left_squeeze_state_shared = self._mp_context.Value('b', False, lock=True)
+            self.left_squeeze_value_shared = self._mp_context.Value('d', 0.0, lock=True)
 
-            self.right_pinch_state_shared = Value('b', False, lock=True)
-            self.right_pinch_value_shared = Value('d', 0.0, lock=True)
-            self.right_squeeze_state_shared = Value('b', False, lock=True)
-            self.right_squeeze_value_shared = Value('d', 0.0, lock=True)
+            self.right_pinch_state_shared = self._mp_context.Value('b', False, lock=True)
+            self.right_pinch_value_shared = self._mp_context.Value('d', 0.0, lock=True)
+            self.right_squeeze_state_shared = self._mp_context.Value('b', False, lock=True)
+            self.right_squeeze_value_shared = self._mp_context.Value('d', 0.0, lock=True)
         else:
-            self.left_trigger_state_shared = Value('b', False, lock=True)
-            self.left_trigger_value_shared = Value('d', 0.0, lock=True)
-            self.left_squeeze_state_shared = Value('b', False, lock=True)
-            self.left_squeeze_value_shared = Value('d', 0.0, lock=True)
-            self.left_thumbstick_state_shared = Value('b', False, lock=True)
-            self.left_thumbstick_value_shared = Array('d', 2, lock=True)
-            self.left_aButton_shared = Value('b', False, lock=True)
-            self.left_bButton_shared = Value('b', False, lock=True)
+            self.left_trigger_state_shared = self._mp_context.Value('b', False, lock=True)
+            self.left_trigger_value_shared = self._mp_context.Value('d', 0.0, lock=True)
+            self.left_squeeze_state_shared = self._mp_context.Value('b', False, lock=True)
+            self.left_squeeze_value_shared = self._mp_context.Value('d', 0.0, lock=True)
+            self.left_thumbstick_state_shared = self._mp_context.Value('b', False, lock=True)
+            self.left_thumbstick_value_shared = self._mp_context.Array('d', 2, lock=True)
+            self.left_aButton_shared = self._mp_context.Value('b', False, lock=True)
+            self.left_bButton_shared = self._mp_context.Value('b', False, lock=True)
 
-            self.right_trigger_state_shared = Value('b', False, lock=True)
-            self.right_trigger_value_shared = Value('d', 0.0, lock=True)
-            self.right_squeeze_state_shared = Value('b', False, lock=True)
-            self.right_squeeze_value_shared = Value('d', 0.0, lock=True)
-            self.right_thumbstick_state_shared = Value('b', False, lock=True)
-            self.right_thumbstick_value_shared = Array('d', 2, lock=True)
-            self.right_aButton_shared = Value('b', False, lock=True)
-            self.right_bButton_shared = Value('b', False, lock=True)
+            self.right_trigger_state_shared = self._mp_context.Value('b', False, lock=True)
+            self.right_trigger_value_shared = self._mp_context.Value('d', 0.0, lock=True)
+            self.right_squeeze_state_shared = self._mp_context.Value('b', False, lock=True)
+            self.right_squeeze_value_shared = self._mp_context.Value('d', 0.0, lock=True)
+            self.right_thumbstick_state_shared = self._mp_context.Value('b', False, lock=True)
+            self.right_thumbstick_value_shared = self._mp_context.Array('d', 2, lock=True)
+            self.right_aButton_shared = self._mp_context.Value('b', False, lock=True)
+            self.right_bButton_shared = self._mp_context.Value('b', False, lock=True)
 
-        self.process = Process(target=self.vuer_run)
+        self.process = self._mp_context.Process(target=self.vuer_run)
         self.process.daemon = True
         self.process.start()
 
@@ -106,7 +113,7 @@ class TeleVuer:
         try:
             with self.head_pose_shared.get_lock():
                 self.head_pose_shared[:] = event.value["camera"]["matrix"]
-        except:
+        except Exception:
             pass
 
     async def on_controller_move(self, event, session, fps=60):
@@ -143,7 +150,9 @@ class TeleVuer:
 
             extract_controller_states(left_controller_state, "left")
             extract_controller_states(right_controller_state, "right")
-        except:
+            with self.controller_event_time_ns_shared.get_lock():
+                self.controller_event_time_ns_shared.value = time.monotonic_ns()
+        except Exception:
             pass
 
     async def on_hand_move(self, event, session, fps=60):
@@ -188,7 +197,7 @@ class TeleVuer:
             extract_hand_states(left_hand_state, "left")
             extract_hand_states(right_hand_state, "right")
 
-        except:
+        except Exception:
             pass
     
     async def main_image_binocular(self, session, fps=60):
@@ -267,6 +276,15 @@ class TeleVuer:
         """np.ndarray, shape (4, 4), right arm SE(3) pose matrix from Vuer (basis OpenXR Convention)."""
         with self.right_arm_pose_shared.get_lock():
             return np.array(self.right_arm_pose_shared[:]).reshape(4, 4, order="F")
+
+    @property
+    def controller_event_age_s(self):
+        """Seconds since the last complete controller event, or infinity before tracking starts."""
+        with self.controller_event_time_ns_shared.get_lock():
+            event_time_ns = self.controller_event_time_ns_shared.value
+        if event_time_ns == 0:
+            return float("inf")
+        return max(0.0, (time.monotonic_ns() - event_time_ns) / 1e9)
 
     # ==================== Hand Tracking Data ====================
     @property
