@@ -38,7 +38,7 @@ mkdir -p ~/Robotics && cd ~/Robotics
 git clone --recurse-submodules https://github.com/dingdongdengdong/roboparty_xr_teleop.git
 cd roboparty_xr_teleop
 git submodule update --init --recursive
-uv sync --extra hardware --extra test
+uv sync --extra hardware
 ```
 
 USB 장치와 카메라를 확인합니다.
@@ -266,8 +266,13 @@ AmazingHand USB 직렬 어댑터를 연결한 뒤 장치 이름을 확인합니�
 
 ```bash
 ls /dev/ttyACM* /dev/ttyUSB*
-uv sync --extra hardware --extra test
+uv sync --extra hardware
 ```
+
+`--all-extras`는 배포 장비에서 사용하지 않습니다. Linux x86_64에서는 LeRobot 자체의 기본
+`torch`/`torchvision` 의존성이 CUDA 12.8 패키지를 설치하므로, RTX 학습/추론 서버에서는 큰
+`nvidia-*` 다운로드가 정상입니다. `test`와 `kinematics` extra는 해당 기능을 개발하거나 검사할 때만
+추가합니다.
 
 통합 Robot은 팔 두 축을 `[-100, 100]`, 손 전체 grasp를 `[0, 100]`으로 노출합니다. 손 내부에서는
 SCS0009 서보 ID 1–8을 모두 사용하며, 짝수 ID의 방향 반전은 AmazingHandControl과 동일하게 적용됩니다.
