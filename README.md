@@ -24,20 +24,20 @@ Meta Quest 2 ──HTTPS/WebXR──> Jetson/Mac ──Tailscale──> Ubuntu 2
 
 ## Jetson 단독 실행 준비
 
-Jetson에서 private 저장소와 같은 버전의 LeRobot checkout을 나란히 준비합니다. `uv`가 Python 3.12
+LeRobot과 AmazingHandControl은 이 저장소의 Git submodule로 고정되어 있습니다. `uv`가 Python 3.12
 환경을 생성하므로 Ubuntu 기본 Python 버전과 분리됩니다.
 
 ```bash
 sudo apt update
-sudo apt install -y git curl openssl v4l-utils can-utils
+sudo apt install -y git git-lfs curl openssl v4l-utils can-utils
+git lfs install
 curl -LsSf https://astral.sh/uv/install.sh | sh
 source "$HOME/.local/bin/env"
 
 mkdir -p ~/Robotics && cd ~/Robotics
-git clone https://github.com/huggingface/lerobot.git
-git -C lerobot checkout 2aba372b
-git clone https://github.com/dingdongdengdong/roboparty_xr_teleop.git
+git clone --recurse-submodules https://github.com/dingdongdengdong/roboparty_xr_teleop.git
 cd roboparty_xr_teleop
+git submodule update --init --recursive
 uv sync --extra hardware --extra test
 ```
 
@@ -114,16 +114,14 @@ right_motor0 right_motor1 right_motor2 right_motor3 right_motor4 right_gripper
 
 ```bash
 cd /path/to/Robotics/roboparty_xr_teleop
-# 아직 없다면 이 저장소와 나란히 LeRobot 0.6.1 checkout을 준비합니다.
-git clone https://github.com/huggingface/lerobot.git ../lerobot
-git -C ../lerobot checkout 2aba372b   # 이 통합에서 검증한 LeRobot 0.6.1 개발 버전
+git submodule update --init --recursive
 
 python3.12 -m venv .venv
 source .venv/bin/activate
 python -m pip install -U pip
 
-# 로컬 LeRobot checkout을 사용하는 경우
-pip install -e "../lerobot[dataset]"
+# 저장소에 고정된 LeRobot submodule을 사용합니다.
+pip install -e "third_party/lerobot[dataset]"
 pip install -e ".[hardware,kinematics]"
 
 export ROBOPARTY_BRIDGE_TOKEN='<Ubuntu에서 생성한 동일한 토큰>'

@@ -960,7 +960,7 @@ wheels = [
 [[package]]
 name = "lerobot"
 version = "0.6.1"
-source = { editable = "../lerobot" }
+source = { editable = "third_party/lerobot" }
 dependencies = [
     { name = "cmake" },
     { name = "draccus" },
@@ -1253,7 +1253,7 @@ test = [
 requires-dist = [
     { name = "cmeel-tinyxml2", marker = "sys_platform == 'darwin' and extra == 'kinematics'", specifier = ">=10,<11" },
     { name = "cmeel-urdfdom", marker = "sys_platform == 'darwin' and extra == 'kinematics'", specifier = ">=4,<5" },
-    { name = "lerobot", extras = ["dataset"], editable = "../lerobot" },
+    { name = "lerobot", extras = ["dataset"], editable = "third_party/lerobot" },
     { name = "motorbridge", marker = "extra == 'hardware'", specifier = ">=0.3.2,<0.4.0" },
     { name = "numpy", specifier = ">=2.0,<2.3" },
     { name = "params-proto", specifier = ">=2.13,<2.13.2" },

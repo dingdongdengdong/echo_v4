@@ -57,7 +57,7 @@ select = ["E", "F", "I", "UP", "B", "SIM"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-pythonpath = [".", "../lerobot/src"]
+pythonpath = [".", "third_party/lerobot/src"]
 
 [tool.uv.sources]
-lerobot = { path = "../lerobot", editable = true }
+lerobot = { path = "third_party/lerobot", editable = true }

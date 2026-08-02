@@ -1,0 +1,6 @@
+[submodule "third_party/AmazingHandControl"]
+	path = third_party/AmazingHandControl
+	url = https://github.com/Betatester777/AmazingHandControl.git
+[submodule "third_party/lerobot"]
+	path = third_party/lerobot
+	url = https://github.com/huggingface/lerobot.git
