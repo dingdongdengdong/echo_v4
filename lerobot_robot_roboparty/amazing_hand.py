@@ -93,6 +93,7 @@ class AmazingHandBus:
         self.speed = speed
         self._controller_factory = controller_factory
         self._controller: AmazingHandController | None = None
+        self._sync_read_supported: bool | None = None
 
     @property
     def is_connected(self) -> bool:
@@ -115,22 +116,26 @@ class AmazingHandBus:
                     controller.write_torque_enable(servo_id, 0)
             raise
         self._controller = controller
+        self._sync_read_supported = None
 
     def read_positions(self) -> dict[int, float]:
         controller = self._require_controller()
-        try:
-            values = controller.sync_read_present_position(list(HAND_SERVO_IDS))
-            if len(values) != len(HAND_SERVO_IDS):
-                raise ConnectionError("incomplete AmazingHand sync feedback")
-            return {
-                servo_id: float(value)
-                for servo_id, value in zip(HAND_SERVO_IDS, values, strict=True)
-            }
-        except (AttributeError, NotImplementedError, RuntimeError):
-            return {
-                servo_id: _position_scalar(controller.read_present_position(servo_id))
-                for servo_id in HAND_SERVO_IDS
-            }
+        if self._sync_read_supported is not False:
+            try:
+                values = controller.sync_read_present_position(list(HAND_SERVO_IDS))
+                if len(values) != len(HAND_SERVO_IDS):
+                    raise ConnectionError("incomplete AmazingHand sync feedback")
+                self._sync_read_supported = True
+                return {
+                    servo_id: float(value)
+                    for servo_id, value in zip(HAND_SERVO_IDS, values, strict=True)
+                }
+            except (AttributeError, NotImplementedError, RuntimeError):
+                self._sync_read_supported = False
+        return {
+            servo_id: _position_scalar(controller.read_present_position(servo_id))
+            for servo_id in HAND_SERVO_IDS
+        }
 
     def write_positions(self, positions_rad: Mapping[int, float]) -> None:
         if set(positions_rad) != set(HAND_SERVO_IDS):
@@ -149,6 +154,7 @@ class AmazingHandBus:
             with suppress(Exception):
                 controller.write_torque_enable(servo_id, 0)
         self._controller = None
+        self._sync_read_supported = None
 
     def _require_controller(self) -> AmazingHandController:
         if self._controller is None:

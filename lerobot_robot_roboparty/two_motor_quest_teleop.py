@@ -286,9 +286,19 @@ def main() -> int:
                     f"{motor['name']}={position:+.3f}rad/{normalize_position(position, motor):+.1f}%"
                     for motor, position in zip(motors, measured, strict=True)
                 )
+                controller = (
+                    f"ctrl=({action['controller.x']:+.3f},{action['controller.y']:+.3f},"
+                    f"{action['controller.z']:+.3f})"
+                )
+                target_report = (
+                    "targets=(" + ",".join(f"{target:+.3f}" for target in targets) + ")"
+                    if targets is not None
+                    else "targets=(disabled)"
+                )
                 print(
                     f"TELEOP {'ACTIVE' if torque_enabled else 'WAITING'} "
-                    f"tracking={int(tracking)} grip={action['controller.squeeze']:.2f} {positions}",
+                    f"tracking={int(tracking)} grip={action['controller.squeeze']:.2f} "
+                    f"{controller} {target_report} {positions}",
                     flush=True,
                 )
                 last_report = now

@@ -102,7 +102,9 @@ def test_bus_accepts_rustypot_single_item_position_lists() -> None:
 
     bus.connect()
     positions = bus.read_positions()
+    second_positions = bus.read_positions()
 
     assert positions[1] == pytest.approx(math.radians(55.0))
     assert positions[2] == pytest.approx(math.radians(-55.0))
+    assert second_positions == positions
     assert controller.sync_reads == 1

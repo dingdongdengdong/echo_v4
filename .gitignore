@@ -12,3 +12,6 @@ __MACOSX/
 *.pem
 teleop/data/
 episode_0*
+outputs/
+q.html
+config/*.bak_*

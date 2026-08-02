@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from copy import deepcopy
 
 import numpy as np
@@ -16,6 +17,8 @@ from .config import (
 from .two_motor_amazing_hand_robot import ARM_TORQUE_CONTROL_KEY
 from .two_motor_calibration import denormalize_position, load_calibration, normalize_position
 from .two_motor_quest_teleop import relative_targets
+
+logger = logging.getLogger(__name__)
 
 
 class QuestTwoMotorAmazingHandProcessor(RobotActionProcessorStep):
@@ -37,6 +40,7 @@ class QuestTwoMotorAmazingHandProcessor(RobotActionProcessorStep):
         self._motor_origin: np.ndarray | None = None
         self._targets: np.ndarray | None = None
         self._last_grasp: float | None = None
+        self._last_control_state: tuple[bool, bool, bool, bool] | None = None
 
     def action(self, action: RobotAction) -> RobotAction:
         observation = self.transition.get(TransitionKey.OBSERVATION)
@@ -57,6 +61,16 @@ class QuestTwoMotorAmazingHandProcessor(RobotActionProcessorStep):
 
         squeezing = float(action.get("controller.squeeze", 0.0)) >= self.teleop_config.clutch_threshold
         arm_enabled = self.armed and tracking and squeezing
+        control_state = (self.armed, tracking, squeezing, arm_enabled)
+        if control_state != self._last_control_state:
+            logger.info(
+                "Quest arm state: armed=%d tracking=%d grip=%d arm_enabled=%d",
+                self.armed,
+                tracking,
+                squeezing,
+                arm_enabled,
+            )
+            self._last_control_state = control_state
         if not arm_enabled:
             self._reset_arm_clutch()
             return self._output(measured_arm, self._last_grasp, arm_enabled=False)
@@ -94,6 +108,7 @@ class QuestTwoMotorAmazingHandProcessor(RobotActionProcessorStep):
     def reset(self) -> None:
         self.armed = True
         self._last_grasp = None
+        self._last_control_state = None
         self._reset_arm_clutch()
 
     def _measured(self, observation: RobotObservation) -> tuple[np.ndarray, float]:

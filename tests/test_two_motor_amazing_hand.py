@@ -155,6 +155,22 @@ def test_processor_holds_last_grasp_on_tracking_loss_and_b_only_disarms_arm(tmp_
     assert disarmed[ARM_TORQUE_CONTROL_KEY] == 0.0
 
 
+def test_processor_logs_quest_arm_state_transitions(tmp_path, caplog) -> None:
+    robot_config, teleop_config = configs(tmp_path)
+    pipeline = make_two_motor_amazing_hand_processor(robot_config, teleop_config)
+
+    with caplog.at_level("INFO"):
+        pipeline((quest_action(), observation()))
+        pipeline((quest_action(), observation()))
+        pipeline((quest_action(**{"controller.squeeze": 1.0}), observation()))
+
+    messages = [record.getMessage() for record in caplog.records if "Quest arm state:" in record.message]
+    assert messages == [
+        "Quest arm state: armed=1 tracking=1 grip=0 arm_enabled=0",
+        "Quest arm state: armed=1 tracking=1 grip=1 arm_enabled=1",
+    ]
+
+
 class FakeCanBus:
     pass
 
@@ -167,6 +183,21 @@ class FakeHand:
 
     def write_positions(self, positions):
         self.commands.append(positions)
+
+
+class FakeCamera:
+    is_connected = True
+
+    def __init__(self, value):
+        self.value = value
+        self.async_timeouts = []
+
+    def async_read(self, timeout_ms):
+        self.async_timeouts.append(timeout_ms)
+        return self.value
+
+    def read_latest(self):
+        raise AssertionError("control-loop observations must use async_read")
 
 
 def test_robot_exposes_three_dataset_axes_and_keeps_torque_signal_internal(tmp_path, monkeypatch) -> None:
@@ -224,3 +255,25 @@ def test_robot_uses_jetson_can_overrides_without_changing_calibration(tmp_path) 
         "interface": "slcan",
         "bitrate": 1_000_000,
     }
+
+
+def test_robot_uses_lerobot_async_camera_reads_for_control_loop(tmp_path, monkeypatch) -> None:
+    robot_config, _ = configs(tmp_path)
+    robot = RobopartyTwoMotorAmazingHand(robot_config)
+    robot._can_bus = FakeCanBus()
+    robot.hand = FakeHand()
+    robot.hand.read_positions = lambda: {servo_id: 0.0 for servo_id in range(1, 9)}
+    front = FakeCamera(np.zeros((480, 640, 3), dtype=np.uint8))
+    wrist = FakeCamera(np.ones((480, 640, 3), dtype=np.uint8))
+    robot.cameras = {"front": front, "wrist": wrist}
+    monkeypatch.setattr(
+        "lerobot_robot_roboparty.two_motor_amazing_hand_robot._read_positions",
+        lambda bus, motors, timeout: np.zeros(2),
+    )
+
+    observation = robot.get_observation()
+
+    assert observation["front"] is front.value
+    assert observation["wrist"] is wrist.value
+    assert front.async_timeouts == [1000]
+    assert wrist.async_timeouts == [1000]

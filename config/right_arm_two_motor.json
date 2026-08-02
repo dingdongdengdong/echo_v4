@@ -2,38 +2,38 @@
   "adapter": {
     "bitrate": 1000000,
     "interface": "slcan",
-    "port": "/dev/ttyACM0"
+    "port": "/dev/serial/by-id/usb-Openlight_Labs_CANable2_b158aa7_github.com_normaldotcom_canable2.git_2070388B3136-if00"
   },
   "calibration_type": "lerobot_manual_range",
-  "captured_at": "2026-08-01T08:36:15.609964+00:00",
+  "captured_at": "2026-08-02T11:46:28.443678+00:00",
   "motors": [
     {
       "center_capture_std_rad": 0.0,
       "command_id": 1,
       "drive_mode": 0,
       "feedback_id": 17,
-      "homing_offset_rad": -1.2094682230869012,
+      "homing_offset_rad": -2.675097276264591,
       "name": "motor_0",
       "normalization_mode": "range_m100_100",
-      "range_max_rad": 2.300679026474402,
-      "range_max_raw_rad": 3.510147249561303,
-      "range_min_rad": -3.5412375066758237,
-      "range_min_raw_rad": -2.3317692835889225,
-      "raw_zero_position_rad": 1.2094682230869012
+      "range_max_rad": 2.3441672388799866,
+      "range_max_raw_rad": 5.019264515144577,
+      "range_min_rad": -3.516060120546273,
+      "range_min_raw_rad": -0.8409628442816821,
+      "raw_zero_position_rad": 2.675097276264591
     },
     {
       "center_capture_std_rad": 0.0,
       "command_id": 2,
       "drive_mode": 0,
       "feedback_id": 18,
-      "homing_offset_rad": 2.875753414206148,
+      "homing_offset_rad": 2.7578774700541686,
       "name": "motor_1",
       "normalization_mode": "range_m100_100",
-      "range_max_rad": 1.6552224002441438,
-      "range_max_raw_rad": -1.2205310139620043,
-      "range_min_rad": -1.7132066834515927,
-      "range_min_raw_rad": -4.588960097657741,
-      "raw_zero_position_rad": -2.875753414206148
+      "range_max_rad": 1.7120622568093378,
+      "range_max_raw_rad": -1.0458152132448308,
+      "range_min_rad": -1.9489585717555515,
+      "range_min_raw_rad": -4.70683604180972,
+      "raw_zero_position_rad": -2.7578774700541686
     }
   ],
   "schema_version": 2

@@ -1,6 +1,7 @@
 # Modified from Unitree xr_teleoperate for RPO robot teleoperation.
 # ruff: noqa: E501
 import asyncio
+import logging
 import multiprocessing
 import time
 from pathlib import Path
@@ -8,6 +9,9 @@ from pathlib import Path
 import numpy as np
 from vuer import Vuer
 from vuer.schemas import Hands, ImageBackground, MotionControllers
+
+
+logger = logging.getLogger(__name__)
 
 
 class TeleVuer:
@@ -118,42 +122,68 @@ class TeleVuer:
 
     async def on_controller_move(self, event, session, fps=60):
         try:
-            with self.left_arm_pose_shared.get_lock():
-                self.left_arm_pose_shared[:] = event.value["left"]
-            with self.right_arm_pose_shared.get_lock():
-                self.right_arm_pose_shared[:] = event.value["right"]
+            value = event.value
 
-            left_controller_state = event.value["leftState"]
-            right_controller_state = event.value["rightState"]
+            def update_pose(key, pose_shared):
+                try:
+                    pose = np.asarray(value.get(key, ()), dtype=float)
+                except (TypeError, ValueError):
+                    return False
+                if pose.shape != (16,) or not np.isfinite(pose).all():
+                    return False
+                with pose_shared.get_lock():
+                    pose_shared[:] = pose
+                return True
+
+            update_pose("left", self.left_arm_pose_shared)
+            right_pose_updated = update_pose("right", self.right_arm_pose_shared)
+
+            left_controller_state = value.get("leftState")
+            right_controller_state = value.get("rightState")
+            if not isinstance(left_controller_state, dict):
+                left_controller_state = {}
+            if not isinstance(right_controller_state, dict):
+                right_controller_state = {}
 
             def extract_controller_states(state_dict, prefix):
                 # trigger
-                with getattr(self, f"{prefix}_trigger_state_shared").get_lock():
-                    getattr(self, f"{prefix}_trigger_state_shared").value = bool(state_dict.get("trigger", False))
-                with getattr(self, f"{prefix}_trigger_value_shared").get_lock():
-                    getattr(self, f"{prefix}_trigger_value_shared").value = float(state_dict.get("triggerValue", 0.0))
+                if "trigger" in state_dict:
+                    with getattr(self, f"{prefix}_trigger_state_shared").get_lock():
+                        getattr(self, f"{prefix}_trigger_state_shared").value = bool(state_dict["trigger"])
+                if "triggerValue" in state_dict:
+                    with getattr(self, f"{prefix}_trigger_value_shared").get_lock():
+                        getattr(self, f"{prefix}_trigger_value_shared").value = float(state_dict["triggerValue"])
                 # squeeze
-                with getattr(self, f"{prefix}_squeeze_state_shared").get_lock():
-                    getattr(self, f"{prefix}_squeeze_state_shared").value = bool(state_dict.get("squeeze", False))
-                with getattr(self, f"{prefix}_squeeze_value_shared").get_lock():
-                    getattr(self, f"{prefix}_squeeze_value_shared").value = float(state_dict.get("squeezeValue", 0.0))
+                if "squeeze" in state_dict:
+                    with getattr(self, f"{prefix}_squeeze_state_shared").get_lock():
+                        getattr(self, f"{prefix}_squeeze_state_shared").value = bool(state_dict["squeeze"])
+                if "squeezeValue" in state_dict:
+                    with getattr(self, f"{prefix}_squeeze_value_shared").get_lock():
+                        getattr(self, f"{prefix}_squeeze_value_shared").value = float(state_dict["squeezeValue"])
                 # thumbstick
-                with getattr(self, f"{prefix}_thumbstick_state_shared").get_lock():
-                    getattr(self, f"{prefix}_thumbstick_state_shared").value = bool(state_dict.get("thumbstick", False))
-                with getattr(self, f"{prefix}_thumbstick_value_shared").get_lock():
-                    getattr(self, f"{prefix}_thumbstick_value_shared")[:] = state_dict.get("thumbstickValue", [0.0, 0.0])
+                if "thumbstick" in state_dict:
+                    with getattr(self, f"{prefix}_thumbstick_state_shared").get_lock():
+                        getattr(self, f"{prefix}_thumbstick_state_shared").value = bool(state_dict["thumbstick"])
+                if "thumbstickValue" in state_dict:
+                    with getattr(self, f"{prefix}_thumbstick_value_shared").get_lock():
+                        getattr(self, f"{prefix}_thumbstick_value_shared")[:] = state_dict["thumbstickValue"]
                 # buttons
-                with getattr(self, f"{prefix}_aButton_shared").get_lock():
-                    getattr(self, f"{prefix}_aButton_shared").value = bool(state_dict.get("aButton", False))
-                with getattr(self, f"{prefix}_bButton_shared").get_lock():
-                    getattr(self, f"{prefix}_bButton_shared").value = bool(state_dict.get("bButton", False))
+                if "aButton" in state_dict:
+                    with getattr(self, f"{prefix}_aButton_shared").get_lock():
+                        getattr(self, f"{prefix}_aButton_shared").value = bool(state_dict["aButton"])
+                if "bButton" in state_dict:
+                    with getattr(self, f"{prefix}_bButton_shared").get_lock():
+                        getattr(self, f"{prefix}_bButton_shared").value = bool(state_dict["bButton"])
 
             extract_controller_states(left_controller_state, "left")
             extract_controller_states(right_controller_state, "right")
-            with self.controller_event_time_ns_shared.get_lock():
-                self.controller_event_time_ns_shared.value = time.monotonic_ns()
+            # Tracking freshness represents a valid right-controller pose, not
+            # merely a button-only update or an empty WebXR frame.
+            if right_pose_updated:
+                with self.controller_event_time_ns_shared.get_lock():
+                    self.controller_event_time_ns_shared.value = time.monotonic_ns()
         except Exception:
-            pass
+            logger.exception("failed to process WebXR controller event")
 
     async def on_hand_move(self, event, session, fps=60):
         try:
@@ -217,8 +247,6 @@ class TeleVuer:
                 MotionControllers(
                     stream=True,
                     key="motionControllers",
-                    left=True,
-                    right=True,
                 ),
                 to="bgChildren",
             )

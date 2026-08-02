@@ -147,7 +147,7 @@ class RobopartyTwoMotorAmazingHand(Robot):
         hand_positions = self.hand.read_positions()
         observation[f"{HAND_GRASP_JOINT}.pos"] = self.hand_mapper.observation(hand_positions)
         for name, camera in self.cameras.items():
-            observation[name] = camera.read_latest()
+            observation[name] = camera.async_read(timeout_ms=1000)
         return observation
 
     def send_action(self, action: dict[str, float]) -> dict[str, float]:
