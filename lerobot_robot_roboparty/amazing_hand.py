@@ -9,6 +9,14 @@ from typing import Protocol
 HAND_SERVO_IDS = tuple(range(1, 9))
 
 
+def _position_scalar(value: float | Sequence[float]) -> float:
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
+        if len(value) != 1:
+            raise ConnectionError(f"expected one servo position, received {len(value)}")
+        value = value[0]
+    return float(value)
+
+
 class AmazingHandController(Protocol):
     def write_torque_enable(self, servo_id: int, enabled: int) -> None: ...
 
@@ -97,7 +105,7 @@ class AmazingHandBus:
         enabled: list[int] = []
         try:
             for servo_id in HAND_SERVO_IDS:
-                float(controller.read_present_position(servo_id))
+                _position_scalar(controller.read_present_position(servo_id))
                 controller.write_goal_speed(servo_id, self.speed)
                 controller.write_torque_enable(servo_id, 1)
                 enabled.append(servo_id)
@@ -118,9 +126,9 @@ class AmazingHandBus:
                 servo_id: float(value)
                 for servo_id, value in zip(HAND_SERVO_IDS, values, strict=True)
             }
-        except (AttributeError, NotImplementedError):
+        except (AttributeError, NotImplementedError, RuntimeError):
             return {
-                servo_id: float(controller.read_present_position(servo_id))
+                servo_id: _position_scalar(controller.read_present_position(servo_id))
                 for servo_id in HAND_SERVO_IDS
             }
 

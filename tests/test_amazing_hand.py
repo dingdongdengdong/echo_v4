@@ -12,8 +12,16 @@ from lerobot_robot_roboparty.amazing_hand import (
 
 
 class FakeController:
-    def __init__(self, *, fail_on_read: int | None = None):
+    def __init__(
+        self,
+        *,
+        fail_on_read: int | None = None,
+        list_wrapped_reads: bool = False,
+        fail_sync_read: bool = False,
+    ):
         self.fail_on_read = fail_on_read
+        self.list_wrapped_reads = list_wrapped_reads
+        self.fail_sync_read = fail_sync_read
         self.torque = []
         self.speeds = []
         self.commands = []
@@ -22,13 +30,16 @@ class FakeController:
     def read_present_position(self, servo_id):
         if servo_id == self.fail_on_read:
             raise ConnectionError("missing servo")
-        return servo_angle_rad(servo_id, 55.0)
+        position = servo_angle_rad(servo_id, 55.0)
+        return [position] if self.list_wrapped_reads else position
 
     def write_goal_speed(self, servo_id, speed):
         self.speeds.append((servo_id, speed))
 
     def sync_read_present_position(self, servo_ids):
         self.sync_reads += 1
+        if self.fail_sync_read:
+            raise RuntimeError("Operation timed out")
         return [self.read_present_position(servo_id) for servo_id in servo_ids]
 
     def write_torque_enable(self, servo_id, enabled):
@@ -83,3 +94,15 @@ def test_bus_rolls_back_enabled_servos_when_connection_fails() -> None:
 
     assert controller.torque == [(1, 1), (2, 1), (2, 0), (1, 0)]
     assert not bus.is_connected
+
+
+def test_bus_accepts_rustypot_single_item_position_lists() -> None:
+    controller = FakeController(list_wrapped_reads=True, fail_sync_read=True)
+    bus = AmazingHandBus("test", 1_000_000, 0.5, 3, lambda *_: controller)
+
+    bus.connect()
+    positions = bus.read_positions()
+
+    assert positions[1] == pytest.approx(math.radians(55.0))
+    assert positions[2] == pytest.approx(math.radians(-55.0))
+    assert controller.sync_reads == 1
