@@ -1,0 +1,40 @@
+{
+  "adapter": {
+    "bitrate": 1000000,
+    "interface": "slcan",
+    "port": "/dev/ttyACM0"
+  },
+  "calibration_type": "lerobot_manual_range",
+  "captured_at": "2026-08-01T08:36:15.609964+00:00",
+  "motors": [
+    {
+      "center_capture_std_rad": 0.0,
+      "command_id": 1,
+      "drive_mode": 0,
+      "feedback_id": 17,
+      "homing_offset_rad": -1.2094682230869012,
+      "name": "motor_0",
+      "normalization_mode": "range_m100_100",
+      "range_max_rad": 2.300679026474402,
+      "range_max_raw_rad": 3.510147249561303,
+      "range_min_rad": -3.5412375066758237,
+      "range_min_raw_rad": -2.3317692835889225,
+      "raw_zero_position_rad": 1.2094682230869012
+    },
+    {
+      "center_capture_std_rad": 0.0,
+      "command_id": 2,
+      "drive_mode": 0,
+      "feedback_id": 18,
+      "homing_offset_rad": 2.875753414206148,
+      "name": "motor_1",
+      "normalization_mode": "range_m100_100",
+      "range_max_rad": 1.6552224002441438,
+      "range_max_raw_rad": -1.2205310139620043,
+      "range_min_rad": -1.7132066834515927,
+      "range_min_raw_rad": -4.588960097657741,
+      "raw_zero_position_rad": -2.875753414206148
+    }
+  ],
+  "schema_version": 2
+}

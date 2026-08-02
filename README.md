@@ -5,24 +5,61 @@
 ## 실행 구조
 
 ```text
-Meta Quest 2 ──HTTPS/WebXR──> Mac (Vuer + LeRobot + 카메라 + IK)
-                                  │
-                                  │ 인증된 JSON/TCP, Tailscale
-                                  ▼
-                         Ubuntu 22.04 (100.96.41.100)
-                         ROS 2 Humble bridge
-                                  │
-                       /joint_states, /joint_ref_states
-                                  ▼
-                            오른팔 제어기
+# 현재 2축 + AmazingHand 구성
+Meta Quest 2 ──HTTPS/WebXR──> Jetson (Vuer + LeRobot + 카메라)
+                                  ├── USB/CAN ──> DM4340 2축
+                                  └── USB serial ──> AmazingHand 8서보
+
+# 향후 5축 구성
+Meta Quest 2 ──HTTPS/WebXR──> Jetson/Mac ──Tailscale──> Ubuntu 22.04 ROS 2 bridge
 ```
 
-- **Mac**: Quest 웹 페이지, 두 RGB 카메라, LeRobot 기록/학습/롤아웃, 오른팔 IK
-- **Ubuntu 22.04 서버**: ROS 2 Humble와 실제 로봇 ROS 토픽
+- **Jetson**: 현재 2축 팔, AmazingHand, 두 RGB 카메라, Quest WebXR와 LeRobot 기록을 모두 실행합니다.
+- **Mac**: 더 이상 현재 2축 구성의 필수 장치가 아니며 개발/점검용으로만 사용할 수 있습니다.
+- **Ubuntu 22.04 서버**: 향후 5축 ROS 2 팔을 사용할 때의 선택 구성입니다.
 - LeRobot 0.6은 Python 3.12+, ROS 2 Humble은 기본 Python 3.10이므로 두 프로세스를 분리합니다.
 - 서버 포트는 공인 인터넷에 노출하지 않고 `tailscale0`에서만 허용합니다.
 
 > 로봇이 USB로 Mac에만 연결되어 있고 Ubuntu 서버에서 `/joint_states`를 볼 수 없다면, 먼저 로봇 제조사 드라이버를 Ubuntu에서 실행하거나 해당 ROS 토픽을 Ubuntu가 접근할 수 있게 해야 합니다. 이 통합의 로봇 경계는 ROS 2 토픽입니다.
+
+## Jetson 단독 실행 준비
+
+Jetson에서 private 저장소와 같은 버전의 LeRobot checkout을 나란히 준비합니다. `uv`가 Python 3.12
+환경을 생성하므로 Ubuntu 기본 Python 버전과 분리됩니다.
+
+```bash
+sudo apt update
+sudo apt install -y git curl openssl v4l-utils can-utils
+curl -LsSf https://astral.sh/uv/install.sh | sh
+source "$HOME/.local/bin/env"
+
+mkdir -p ~/Robotics && cd ~/Robotics
+git clone https://github.com/huggingface/lerobot.git
+git -C lerobot checkout 2aba372b
+git clone https://github.com/dingdongdengdong/roboparty_xr_teleop.git
+cd roboparty_xr_teleop
+uv sync --extra hardware --extra test
+```
+
+USB 장치와 카메라를 확인합니다.
+
+```bash
+ls -l /dev/ttyACM* /dev/ttyUSB* 2>/dev/null
+v4l2-ctl --list-devices
+sudo usermod -aG dialout "$USER"   # 적용하려면 한 번 로그아웃/로그인
+```
+
+Quest가 접근할 수 있는 Jetson의 같은 Wi-Fi/LAN 주소로 인증서를 생성합니다. PEM 파일은 Git에
+포함되지 않습니다.
+
+```bash
+JETSON_LAN_IP=192.168.0.30
+openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
+  -keyout key.pem -out cert.pem -subj '/CN=roboparty-jetson' \
+  -addext "subjectAltName=IP:${JETSON_LAN_IP}"
+```
+
+Quest 브라우저 주소는 `https://<JETSON_LAN_IP>:8012/?ws=wss://<JETSON_LAN_IP>:8012`입니다.
 
 ## 안전 동작
 
@@ -224,6 +261,79 @@ roboparty-quest-two-motor-teleop --lan-ip <MAC_LAN_IP>
 컨트롤러 `z` 이동이 motor 0, `y` 이동이 motor 1을 상대 제어하며, 그립을 놓거나 추적이 끊기면 두
 모터를 disable합니다. 축과 방향은 `--motor0-axis`, `--motor1-axis`, `--motor0-sign`,
 `--motor1-sign`으로 바꿀 수 있습니다.
+
+### 2모터 + AmazingHand full-grasp 통합
+
+AmazingHand USB 직렬 어댑터를 연결한 뒤 장치 이름을 확인합니다. 포트는 자동 선택하지 않습니다.
+
+```bash
+ls /dev/ttyACM* /dev/ttyUSB*
+uv sync --extra hardware --extra test
+```
+
+통합 Robot은 팔 두 축을 `[-100, 100]`, 손 전체 grasp를 `[0, 100]`으로 노출합니다. 손 내부에서는
+SCS0009 서보 ID 1–8을 모두 사용하며, 짝수 ID의 방향 반전은 AmazingHandControl과 동일하게 적용됩니다.
+
+```bash
+roboparty-teleoperate \
+  --robot.type=roboparty_two_motor_amazing_hand \
+  --robot.id=two_motor_amazing_hand \
+  --robot.hand_port=/dev/ttyUSB1 \
+  --robot.can_port=/dev/ttyACM0 \
+  --robot.can_interface=slcan \
+  --robot.two_motor_calibration_path=config/right_arm_two_motor.json \
+  --robot.cameras='{front: {type: opencv, index_or_path: /dev/video0, width: 640, height: 480, fps: 30}, wrist: {type: opencv, index_or_path: /dev/video1, width: 640, height: 480, fps: 30}}' \
+  --teleop.type=quest2_vuer \
+  --teleop.id=quest2 \
+  --teleop.cert_file=cert.pem \
+  --teleop.key_file=key.pem \
+  --fps=20 \
+  --display_data=true
+```
+
+- 오른쪽 grip: 팔 두 축 clutch. 놓거나 추적이 끊기면 팔 torque를 해제합니다.
+- 오른쪽 trigger: grip과 독립적으로 손을 연속 제어합니다. `0%=open`, `100%=full grasp`입니다.
+- Quest 추적이 끊기면 손은 마지막 grasp를 유지합니다.
+- B/A: 팔 disarm/rearm이며 손 grasp에는 영향을 주지 않습니다.
+- 종료 시 팔과 손 torque를 모두 해제합니다.
+
+먼저 Hub 업로드 없이 짧은 episode를 기록합니다.
+
+```bash
+roboparty-record \
+  --robot.type=roboparty_two_motor_amazing_hand \
+  --robot.id=two_motor_amazing_hand \
+  --robot.hand_port=/dev/ttyUSB1 \
+  --robot.can_port=/dev/ttyACM0 \
+  --robot.can_interface=slcan \
+  --robot.two_motor_calibration_path=config/right_arm_two_motor.json \
+  --robot.cameras='{front: {type: opencv, index_or_path: /dev/video0, width: 640, height: 480, fps: 30}, wrist: {type: opencv, index_or_path: /dev/video1, width: 640, height: 480, fps: 30}}' \
+  --teleop.type=quest2_vuer \
+  --teleop.id=quest2 \
+  --teleop.cert_file=cert.pem \
+  --teleop.key_file=key.pem \
+  --dataset.repo_id=local/roboparty-two-motor-amazing-hand \
+  --dataset.num_episodes=2 \
+  --dataset.single_task='Grasp the object with the right hand' \
+  --dataset.episode_time_s=20 \
+  --dataset.reset_time_s=10 \
+  --dataset.fps=20 \
+  --dataset.push_to_hub=false \
+  --display_data=true
+```
+
+이 구성의 LeRobot action/state 순서는 다음 3축으로 고정됩니다.
+
+```text
+motor_0.pos motor_1.pos right_hand_grasp.pos
+```
+
+실제 dataset을 Hub에 올릴 때는 `--dataset.push_to_hub=true --dataset.private=true`와 본인의
+`<HF_USER>/<DATASET_NAME>` repo ID를 사용합니다.
+
+손 구현은 8서보 통신 계층과 현재의 `FullGraspMapper`가 분리되어 있습니다. 추후 자유 손 추적은 새
+8축 mapper를 추가하고, 5축 팔은 기존 `roboparty_right_arm` 계층과 같은 방식으로 결합하여 transport를
+다시 구현하지 않고 확장합니다.
 
 ```bash
 export HF_USER=<huggingface-user>

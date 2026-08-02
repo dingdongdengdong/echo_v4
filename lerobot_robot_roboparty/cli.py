@@ -11,15 +11,22 @@ from lerobot.teleoperators.utils import make_teleoperator_from_config
 from lerobot.utils.utils import init_logging
 from lerobot.utils.visualization_utils import init_visualization, shutdown_visualization
 
-from .config import Quest2VuerConfig, RobopartyRightArmConfig
+from .config import Quest2VuerConfig, RobopartyRightArmConfig, RobopartyTwoMotorAmazingHandConfig
 from .processor import make_quest_processor
+from .two_motor_amazing_hand_processor import make_two_motor_amazing_hand_processor
 
 
 def _validate_configs(robot_config, teleop_config) -> None:
-    if not isinstance(robot_config, RobopartyRightArmConfig):
-        raise TypeError("--robot.type must be roboparty_right_arm")
+    if not isinstance(robot_config, (RobopartyRightArmConfig, RobopartyTwoMotorAmazingHandConfig)):
+        raise TypeError("--robot.type must be roboparty_right_arm or roboparty_two_motor_amazing_hand")
     if not isinstance(teleop_config, Quest2VuerConfig):
         raise TypeError("--teleop.type must be quest2_vuer")
+
+
+def _make_quest_processor(robot_config, teleop_config):
+    if isinstance(robot_config, RobopartyTwoMotorAmazingHandConfig):
+        return make_two_motor_amazing_hand_processor(robot_config, teleop_config)
+    return make_quest_processor(robot_config, teleop_config)
 
 
 @parser.wrap()
@@ -29,7 +36,7 @@ def _teleoperate(cfg: TeleoperateConfig) -> None:
     _validate_configs(cfg.robot, cfg.teleop)
     teleop = make_teleoperator_from_config(cfg.teleop)
     robot = make_robot_from_config(cfg.robot)
-    teleop_processor = make_quest_processor(cfg.robot, cfg.teleop)
+    teleop_processor = _make_quest_processor(cfg.robot, cfg.teleop)
     _, robot_action_processor, observation_processor = make_default_processors()
     display_started = False
     try:
@@ -69,7 +76,7 @@ def _record(cfg: RecordConfig):
     if cfg.teleop is None:
         raise ValueError("recording requires --teleop.type=quest2_vuer")
     _validate_configs(cfg.robot, cfg.teleop)
-    return record(cfg, teleop_action_processor=make_quest_processor(cfg.robot, cfg.teleop))
+    return record(cfg, teleop_action_processor=_make_quest_processor(cfg.robot, cfg.teleop))
 
 
 def teleoperate_main() -> None:

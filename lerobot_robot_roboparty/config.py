@@ -16,6 +16,9 @@ RIGHT_ARM_JOINTS = (
 )
 GRIPPER_JOINT = "right_gripper"
 ALL_JOINTS = (*RIGHT_ARM_JOINTS, GRIPPER_JOINT)
+TWO_MOTOR_JOINTS = ("motor_0", "motor_1")
+HAND_GRASP_JOINT = "right_hand_grasp"
+TWO_MOTOR_HAND_JOINTS = (*TWO_MOTOR_JOINTS, HAND_GRASP_JOINT)
 
 # URDF limits for right_arm_pitch/roll/yaw and right_elbow_pitch/yaw, in radians.
 DEFAULT_ARM_LIMITS: dict[str, tuple[float, float]] = {
@@ -56,6 +59,59 @@ class RobopartyRightArmConfig(RobotConfig):
             raise ValueError("bridge timeouts must be positive")
         if self.max_relative_target_rad <= 0:
             raise ValueError("max_relative_target_rad must be positive")
+
+
+@RobotConfig.register_subclass("roboparty_two_motor_amazing_hand")
+@dataclass(kw_only=True)
+class RobopartyTwoMotorAmazingHandConfig(RobotConfig):
+    """Two local DM4340 joints plus an AmazingHand right hand."""
+
+    hand_port: str
+    two_motor_calibration_path: Path = Path("config/right_arm_two_motor.json")
+    can_port: str | None = None
+    can_interface: str | None = None
+    can_bitrate: int | None = None
+    hand_baudrate: int = 1_000_000
+    hand_timeout_s: float = 0.5
+    hand_open_deg: float = 0.0
+    hand_closed_deg: float = 110.0
+    hand_speed: int = 3
+    can_timeout_s: float = 0.05
+    max_relative_target_rad: float = 0.03
+    kp: float = 8.0
+    kd: float = 0.5
+    command_enabled: bool = True
+    motor_axes: tuple[str, str] = ("z", "y")
+    motor_signs: tuple[float, float] = (1.0, 1.0)
+    motor_gain_rad_per_m: float = 3.0
+    cameras: dict[str, CameraConfig] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        if not self.hand_port.strip():
+            raise ValueError("hand_port must not be empty")
+        if self.can_port is not None and not self.can_port.strip():
+            raise ValueError("can_port must not be empty when provided")
+        if self.can_interface is not None and not self.can_interface.strip():
+            raise ValueError("can_interface must not be empty when provided")
+        if self.can_bitrate is not None and self.can_bitrate <= 0:
+            raise ValueError("can_bitrate must be positive when provided")
+        if self.hand_baudrate <= 0:
+            raise ValueError("hand_baudrate must be positive")
+        if self.hand_timeout_s <= 0 or self.can_timeout_s <= 0:
+            raise ValueError("hardware timeouts must be positive")
+        if self.hand_open_deg == self.hand_closed_deg:
+            raise ValueError("hand_open_deg and hand_closed_deg must be different")
+        if not 1 <= self.hand_speed <= 6:
+            raise ValueError("hand_speed must be between 1 and 6")
+        if self.max_relative_target_rad <= 0 or self.motor_gain_rad_per_m <= 0:
+            raise ValueError("motor gain and relative target limit must be positive")
+        if not 0.0 <= self.kp <= 500.0 or not 0.0 <= self.kd <= 5.0:
+            raise ValueError("kp must be in [0, 500] and kd must be in [0, 5]")
+        if len(self.motor_axes) != 2 or any(axis not in {"x", "y", "z"} for axis in self.motor_axes):
+            raise ValueError("motor_axes must contain two axes selected from x, y, z")
+        if len(self.motor_signs) != 2 or any(sign not in {-1.0, 1.0} for sign in self.motor_signs):
+            raise ValueError("motor_signs must contain exactly two values selected from -1 and 1")
 
 
 @TeleoperatorConfig.register_subclass("quest2_vuer")

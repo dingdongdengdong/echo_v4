@@ -22,6 +22,7 @@ hardware = [
   "motorbridge>=0.3.2,<0.4.0",
   "python-can>=4.2,<5.0",
   "pyserial>=3.5,<4.0",
+  "rustypot>=1.4,<2",
 ]
 kinematics = [
   # Pin 3.7 macOS wheels are linked against urdfdom 4.x.
