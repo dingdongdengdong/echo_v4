@@ -255,10 +255,13 @@ roboparty-teleoperate \
 roboparty-quest-two-motor-teleop --lan-ip <MAC_LAN_IP>
 ```
 
-오른쪽 그립을 누르는 순간 현재 모터/컨트롤러 위치를 기준점으로 잡습니다. 그립을 누른 동안 기본적으로
-컨트롤러 `z` 이동이 motor 0, `y` 이동이 motor 1을 상대 제어하며, 그립을 놓거나 추적이 끊기면 두
-모터를 disable합니다. 축과 방향은 `--motor0-axis`, `--motor1-axis`, `--motor0-sign`,
-`--motor1-sign`으로 바꿀 수 있습니다.
+오른쪽 그립을 누르는 순간 현재 모터/컨트롤러 위치를 기준점으로 잡습니다. `urdf_temp4`의 현재 2축
+구성에서는 motor 0이 joint1(베이스 yaw), motor 1이 joint2(숄더 pitch)입니다. 그립을 누른 동안
+컨트롤러 `y` 이동이 joint1/motor 0, 사용자가 느끼는 상하 방향인 컨트롤러 `z` 이동이
+joint2/motor 1을 상대 제어합니다. 그립을 놓거나 추적이 끊기면 두 모터를 disable합니다. 축과
+방향은 `--motor0-axis`, `--motor1-axis`, `--motor0-sign`, `--motor1-sign`으로 바꿀 수 있습니다.
+명령 위치는 캘리브레이션 범위뿐 아니라 `urdf_temp4`의 joint1 ±3.1067 rad, joint2 ±1.7453 rad
+범위로도 제한되며 두 범위의 교집합만 사용합니다.
 
 ### 2모터 + AmazingHand full-grasp 통합
 

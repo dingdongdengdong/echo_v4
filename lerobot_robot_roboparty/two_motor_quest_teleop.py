@@ -29,6 +29,14 @@ CAN_CMD_DISABLE = 0xFD
 MIT_KP_RANGE = (0.0, 500.0)
 MIT_KD_RANGE = (0.0, 5.0)
 AXIS_INDEX = {"x": 0, "y": 1, "z": 2}
+# temp_arm4 joint1 is the base yaw motor and joint2 is the shoulder pitch
+# motor. On the Quest controller, the user's vertical gesture is right.z, so
+# vertical motion must drive joint2 rather than joint1.
+DEFAULT_JOINT_AXES = ("y", "z")
+TEMP_ARM4_JOINT_LIMITS_RAD = (
+    (-3.106686069, 3.106686069),
+    (-1.745329252, 1.745329252),
+)
 
 
 def _float_to_uint(value: float, minimum: float, maximum: float, bits: int) -> int:
@@ -91,15 +99,21 @@ def relative_targets(
     signs: tuple[float, float],
     gain_rad_per_m: float,
     max_step_rad: float,
+    joint_limits: tuple[tuple[float, float], tuple[float, float]] | None = None,
 ) -> np.ndarray:
     targets = np.empty(2, dtype=float)
     for index, motor in enumerate(motors):
         axis = AXIS_INDEX[axes[index]]
         controller_delta = controller_position[axis] - controller_origin[axis]
         requested = motor_origin[index] + signs[index] * gain_rad_per_m * controller_delta
-        requested = float(
-            np.clip(requested, float(motor["range_min_rad"]), float(motor["range_max_rad"]))
-        )
+        lower = float(motor["range_min_rad"])
+        upper = float(motor["range_max_rad"])
+        if joint_limits is not None:
+            lower = max(lower, joint_limits[index][0])
+            upper = min(upper, joint_limits[index][1])
+        if lower > upper:
+            raise ValueError(f"motor {motor['name']} calibration does not overlap its joint limit")
+        requested = float(np.clip(requested, lower, upper))
         targets[index] = float(
             np.clip(
                 requested,
@@ -167,8 +181,8 @@ def main() -> int:
     parser.add_argument("--max-step", type=float, default=0.03, help="Maximum radians per control frame")
     parser.add_argument("--kp", type=float, default=8.0)
     parser.add_argument("--kd", type=float, default=0.5)
-    parser.add_argument("--motor0-axis", choices=AXIS_INDEX, default="z")
-    parser.add_argument("--motor1-axis", choices=AXIS_INDEX, default="y")
+    parser.add_argument("--motor0-axis", choices=AXIS_INDEX, default=DEFAULT_JOINT_AXES[0])
+    parser.add_argument("--motor1-axis", choices=AXIS_INDEX, default=DEFAULT_JOINT_AXES[1])
     parser.add_argument("--motor0-sign", type=float, choices=(-1.0, 1.0), default=1.0)
     parser.add_argument("--motor1-sign", type=float, choices=(-1.0, 1.0), default=1.0)
     args = parser.parse_args()
@@ -232,6 +246,14 @@ def main() -> int:
             f"motor_1<-{args.motor1_sign:+.0f}*right.{args.motor1_axis}",
             flush=True,
         )
+        print(
+            "URDF LIMITS "
+            f"joint1=[{TEMP_ARM4_JOINT_LIMITS_RAD[0][0]:+.3f},"
+            f"{TEMP_ARM4_JOINT_LIMITS_RAD[0][1]:+.3f}]rad "
+            f"joint2=[{TEMP_ARM4_JOINT_LIMITS_RAD[1][0]:+.3f},"
+            f"{TEMP_ARM4_JOINT_LIMITS_RAD[1][1]:+.3f}]rad",
+            flush=True,
+        )
 
         period = 1.0 / args.fps
         armed = True
@@ -270,6 +292,7 @@ def main() -> int:
                     signs=(args.motor0_sign, args.motor1_sign),
                     gain_rad_per_m=args.gain,
                     max_step_rad=args.max_step,
+                    joint_limits=TEMP_ARM4_JOINT_LIMITS_RAD,
                 )
                 _send_targets(bus, motors, targets, kp=args.kp, kd=args.kd)
             elif torque_enabled:

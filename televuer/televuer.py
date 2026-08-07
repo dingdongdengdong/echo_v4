@@ -10,7 +10,6 @@ import numpy as np
 from vuer import Vuer
 from vuer.schemas import Hands, ImageBackground, MotionControllers
 
-
 logger = logging.getLogger(__name__)
 
 
@@ -247,6 +246,8 @@ class TeleVuer:
                 MotionControllers(
                     stream=True,
                     key="motionControllers",
+                    left=False,
+                    right=True,
                 ),
                 to="bgChildren",
             )
