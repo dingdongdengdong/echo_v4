@@ -14,6 +14,7 @@ from .can_probe import (
     DM4340P_VELOCITY_LIMIT_RAD_S,
     read_dm4340p_state,
 )
+from .clutch import webxr_position_to_robot
 from .config import Quest2VuerConfig
 from .quest_check import wait_until_listening
 from .teleoperator import Quest2Vuer
@@ -29,11 +30,10 @@ CAN_CMD_DISABLE = 0xFD
 MIT_KP_RANGE = (0.0, 500.0)
 MIT_KD_RANGE = (0.0, 5.0)
 AXIS_INDEX = {"x": 0, "y": 1, "z": 2}
-# temp_arm4 joint1 is the base yaw motor and joint2 is the shoulder pitch
-# motor. On the Quest controller, the user's vertical gesture is right.z, so
-# vertical motion must drive joint2 rather than joint1.
+# The handoff robot_arm joint1 is the base yaw motor and joint2 is the next arm
+# joint. Direct diagnostics use robot FLU coordinates after the WebXR mapping.
 DEFAULT_JOINT_AXES = ("y", "z")
-TEMP_ARM4_JOINT_LIMITS_RAD = (
+RIGHT_ARM_JOINT_LIMITS_RAD = (
     (-3.106686069, 3.106686069),
     (-1.745329252, 1.745329252),
 )
@@ -138,15 +138,34 @@ def _send_simple_command(bus, motor_ids: list[int], command: int) -> None:
         time.sleep(0.002)
 
 
-def _send_targets(bus, motors: list[dict], targets: np.ndarray, *, kp: float, kd: float) -> None:
+def _motor_gains(value: float | tuple[float, float], motor_count: int) -> tuple[float, ...]:
+    if isinstance(value, (int, float)):
+        return (float(value),) * motor_count
+    if len(value) != motor_count:
+        raise ValueError(f"expected {motor_count} motor gains, received {len(value)}")
+    return tuple(float(item) for item in value)
+
+
+def _send_targets(
+    bus,
+    motors: list[dict],
+    targets: np.ndarray,
+    *,
+    kp: float | tuple[float, float],
+    kd: float | tuple[float, float],
+) -> None:
     import can
 
-    for motor, logical_target in zip(motors, targets, strict=True):
+    kp_values = _motor_gains(kp, len(motors))
+    kd_values = _motor_gains(kd, len(motors))
+    for motor, logical_target, motor_kp, motor_kd in zip(
+        motors, targets, kp_values, kd_values, strict=True
+    ):
         raw_target = logical_to_raw_position(float(logical_target), motor)
         bus.send(
             can.Message(
                 arbitration_id=int(motor["command_id"]),
-                data=encode_mit_position(raw_target, kp=kp, kd=kd),
+                data=encode_mit_position(raw_target, kp=motor_kp, kd=motor_kd),
                 is_extended_id=False,
             )
         )
@@ -174,11 +193,13 @@ def main() -> int:
     parser.add_argument("--cert", type=Path, default=Path("cert.pem"))
     parser.add_argument("--key", type=Path, default=Path("key.pem"))
     parser.add_argument("--calibration", type=Path, default=DEFAULT_CALIBRATION_PATH)
-    parser.add_argument("--fps", type=float, default=20.0)
+    parser.add_argument("--fps", type=float, default=15.0)
     parser.add_argument("--can-timeout", type=float, default=0.05)
     parser.add_argument("--clutch-threshold", type=float, default=0.5)
     parser.add_argument("--gain", type=float, default=3.0, help="Motor radians per controller meter")
-    parser.add_argument("--max-step", type=float, default=0.03, help="Maximum radians per control frame")
+    parser.add_argument("--max-step", type=float, default=0.07, help="Maximum radians per control frame")
+    parser.add_argument("--base-yaw-deg", type=float, default=0.0)
+    parser.add_argument("--mirror", action="store_true")
     parser.add_argument("--kp", type=float, default=8.0)
     parser.add_argument("--kd", type=float, default=0.5)
     parser.add_argument("--motor0-axis", choices=AXIS_INDEX, default=DEFAULT_JOINT_AXES[0])
@@ -189,6 +210,8 @@ def main() -> int:
 
     if args.fps <= 0 or args.can_timeout <= 0 or args.gain <= 0 or args.max_step <= 0:
         parser.error("--fps, --can-timeout, --gain, and --max-step must be positive")
+    if not np.isfinite(args.base_yaw_deg):
+        parser.error("--base-yaw-deg must be finite")
     if not 0 <= args.clutch_threshold <= 1:
         parser.error("--clutch-threshold must be in [0, 1]")
     if not MIT_KP_RANGE[0] <= args.kp <= MIT_KP_RANGE[1]:
@@ -215,6 +238,8 @@ def main() -> int:
             cert_file=args.cert,
             key_file=args.key,
             clutch_threshold=args.clutch_threshold,
+            base_yaw_deg=args.base_yaw_deg,
+            mirror=args.mirror,
         )
     )
     bus = None
@@ -248,10 +273,10 @@ def main() -> int:
         )
         print(
             "URDF LIMITS "
-            f"joint1=[{TEMP_ARM4_JOINT_LIMITS_RAD[0][0]:+.3f},"
-            f"{TEMP_ARM4_JOINT_LIMITS_RAD[0][1]:+.3f}]rad "
-            f"joint2=[{TEMP_ARM4_JOINT_LIMITS_RAD[1][0]:+.3f},"
-            f"{TEMP_ARM4_JOINT_LIMITS_RAD[1][1]:+.3f}]rad",
+            f"joint1=[{RIGHT_ARM_JOINT_LIMITS_RAD[0][0]:+.3f},"
+            f"{RIGHT_ARM_JOINT_LIMITS_RAD[0][1]:+.3f}]rad "
+            f"joint2=[{RIGHT_ARM_JOINT_LIMITS_RAD[1][0]:+.3f},"
+            f"{RIGHT_ARM_JOINT_LIMITS_RAD[1][1]:+.3f}]rad",
             flush=True,
         )
 
@@ -270,9 +295,13 @@ def main() -> int:
             clutch = float(action["controller.squeeze"]) >= args.clutch_threshold
             enabled = armed and tracking and clutch
             if enabled:
-                controller_position = np.array(
-                    [action["controller.x"], action["controller.y"], action["controller.z"]],
-                    dtype=float,
+                controller_position = webxr_position_to_robot(
+                    np.array(
+                        [action["controller.x"], action["controller.y"], action["controller.z"]],
+                        dtype=float,
+                    ),
+                    base_yaw_deg=args.base_yaw_deg,
+                    mirror=args.mirror,
                 )
                 if not torque_enabled:
                     controller_origin = controller_position.copy()
@@ -292,7 +321,7 @@ def main() -> int:
                     signs=(args.motor0_sign, args.motor1_sign),
                     gain_rad_per_m=args.gain,
                     max_step_rad=args.max_step,
-                    joint_limits=TEMP_ARM4_JOINT_LIMITS_RAD,
+                    joint_limits=RIGHT_ARM_JOINT_LIMITS_RAD,
                 )
                 _send_targets(bus, motors, targets, kp=args.kp, kd=args.kd)
             elif torque_enabled:

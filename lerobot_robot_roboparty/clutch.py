@@ -2,6 +2,51 @@ from __future__ import annotations
 
 import numpy as np
 
+R_WEBXR_TO_ROBOT = np.array(
+    [
+        [0.0, 0.0, -1.0],
+        [-1.0, 0.0, 0.0],
+        [0.0, 1.0, 0.0],
+    ]
+)
+MIRROR_ROBOT_Y = np.diag([1.0, -1.0, 1.0])
+
+
+def webxr_to_robot_mapping(base_yaw_deg: float = 0.0, mirror: bool = False) -> np.ndarray:
+    """Build the handoff WebXR RUB to robot FLU basis mapping."""
+    angle = np.radians(float(base_yaw_deg))
+    yaw = np.array(
+        [
+            [np.cos(angle), -np.sin(angle), 0.0],
+            [np.sin(angle), np.cos(angle), 0.0],
+            [0.0, 0.0, 1.0],
+        ]
+    )
+    mapping = yaw @ R_WEBXR_TO_ROBOT
+    return MIRROR_ROBOT_Y @ mapping if mirror else mapping
+
+
+def webxr_position_to_robot(
+    position: np.ndarray, *, base_yaw_deg: float = 0.0, mirror: bool = False
+) -> np.ndarray:
+    """Map a raw WebXR position or displacement into the robot base convention."""
+    position = np.asarray(position, dtype=float)
+    if position.shape != (3,) or not np.isfinite(position).all():
+        raise ValueError("WebXR position must be finite and have shape (3,)")
+    return webxr_to_robot_mapping(base_yaw_deg, mirror) @ position
+
+
+def webxr_pose_to_robot(
+    pose: np.ndarray, *, base_yaw_deg: float = 0.0, mirror: bool = False
+) -> np.ndarray:
+    """Change a raw WebXR controller pose from RUB basis into robot FLU basis."""
+    pose = _validate_pose(pose)
+    mapping = webxr_to_robot_mapping(base_yaw_deg, mirror)
+    converted = np.eye(4)
+    converted[:3, :3] = mapping @ pose[:3, :3] @ mapping.T
+    converted[:3, 3] = mapping @ pose[:3, 3]
+    return converted
+
 
 def matrix_to_quaternion(matrix: np.ndarray) -> np.ndarray:
     """Return an xyzw quaternion from a 3x3 rotation matrix."""

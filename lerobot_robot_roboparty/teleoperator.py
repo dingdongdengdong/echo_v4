@@ -69,11 +69,17 @@ class Quest2Vuer(Teleoperator):
     def get_action(self) -> dict[str, float]:
         if self._wrapper is None:
             raise ConnectionError("Quest teleoperator is not connected")
-        data = self._wrapper.get_motion_state_data()
-        pose = np.asarray(data.right_arm_pose, dtype=float)
-        age_s = self._wrapper.tvuer.controller_event_age_s
+        # Read the raw WebXR controller pose. The legacy wrapper output removes
+        # head translation and adds Atom-specific offsets, which must not enter
+        # the LeRobot-style right-arm processor pipeline.
+        tvuer = self._wrapper.tvuer
+        pose = np.asarray(tvuer.right_arm_pose, dtype=float)
+        age_s = tvuer.controller_event_age_s
         tracking = (
-            pose.shape == (4, 4) and np.isfinite(pose).all() and age_s <= self.config.tracking_timeout_s
+            pose.shape == (4, 4)
+            and np.isfinite(pose).all()
+            and not np.isclose(np.linalg.det(pose[:3, :3]), 0.0, atol=1e-6)
+            and age_s <= self.config.tracking_timeout_s
         )
         if tracking:
             position = pose[:3, 3]
@@ -81,7 +87,9 @@ class Quest2Vuer(Teleoperator):
         else:
             position = np.zeros(3)
             quaternion = np.array([0.0, 0.0, 0.0, 1.0])
-        state = data.tele_state
+        squeeze = float(tvuer.right_controller_squeeze_value)
+        if bool(tvuer.right_controller_squeeze_state):
+            squeeze = max(squeeze, 1.0)
         return {
             "controller.x": float(position[0]),
             "controller.y": float(position[1]),
@@ -91,10 +99,10 @@ class Quest2Vuer(Teleoperator):
             "controller.qz": float(quaternion[2]),
             "controller.qw": float(quaternion[3]),
             "controller.tracking": float(tracking),
-            "controller.squeeze": float(state.right_squeeze_ctrl_value if state else 0.0),
-            "controller.trigger": float(self._wrapper.tvuer.right_controller_trigger_value),
-            "controller.a": float(bool(state.right_aButton) if state else False),
-            "controller.b": float(bool(state.right_bButton) if state else False),
+            "controller.squeeze": squeeze,
+            "controller.trigger": float(tvuer.right_controller_trigger_value),
+            "controller.a": float(bool(tvuer.right_controller_aButton)),
+            "controller.b": float(bool(tvuer.right_controller_bButton)),
         }
 
     def send_feedback(self, feedback: dict[str, Any]) -> None:

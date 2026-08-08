@@ -1,6 +1,6 @@
 # Roboparty Quest 2 → LeRobot 오른팔 텔레오퍼레이션
 
-이 저장소는 Roboparty의 오른팔(5축 + 그리퍼)을 Meta Quest 2로 조작하고, 그 결과를 Hugging Face LeRobot 데이터셋/ACT 학습 형식으로 기록하기 위한 통합을 포함합니다.
+이 저장소는 handoff의 현재 실물용 3축 임시 팔 URDF를 기준으로 J1·J2와 AmazingHand를 Meta Quest 2로 조작하고, 그 결과를 Hugging Face LeRobot 데이터셋/ACT 학습 형식으로 기록하기 위한 통합을 포함합니다. J4/J5 쪽 생략된 링크는 IK 체인에 넣지 않습니다.
 
 ## 실행 구조
 
@@ -63,11 +63,12 @@ Quest 브라우저 주소는 `https://<JETSON_LAN_IP>:8012/?ws=wss://<JETSON_LAN
 
 ## 안전 동작
 
-- Quest 오른쪽 **grip/squeeze**를 누르는 동안만 움직입니다.
-- **B**: 즉시 pause, **A**: 다시 arm. A를 눌러도 grip을 다시 잡기 전에는 움직이지 않습니다.
+- 현재 **LeRobot 2모터 + AmazingHand 통합 경로는 유효한 Quest tracking이 들어오면 자동 engage**합니다.
+- **B**: J1·J2 즉시 disarm, **A**: B 이후 rearm. grip/squeeze를 반복해도 팔 torque나 IK 기준점은 바뀌지 않습니다.
+- 오른쪽 **trigger**는 AmazingHand grasp만 제어하며 팔 arm/disarm과 독립입니다.
 - 컨트롤러 추적이 250 ms 이상 끊기면 현재 관절 위치를 유지합니다.
-- engage 순간의 상대 좌표를 사용하므로 Quest 좌표 원점으로 팔이 점프하지 않습니다.
-- 프레임당 EE 이동 3 cm, workspace ±20 cm, 명령당 관절 변화 기본 0.05 rad로 제한합니다.
+- 최초 tracking 또는 A rearm 순간의 상대 좌표를 사용하므로 Quest 좌표 원점으로 팔이 점프하지 않습니다.
+- 프레임당 EE 이동 3 cm, workspace ±20 cm, 명령당 관절 변화 기본 0.07 rad로 제한합니다.
 - ROS 상태가 0.5초보다 오래되거나 6개 관절이 완전하지 않으면 서버가 명령을 거부합니다.
 - 최초 진단은 반드시 `--robot.command_enabled=false`로 수행하세요.
 
@@ -255,12 +256,12 @@ roboparty-teleoperate \
 roboparty-quest-two-motor-teleop --lan-ip <MAC_LAN_IP>
 ```
 
-오른쪽 그립을 누르는 순간 현재 모터/컨트롤러 위치를 기준점으로 잡습니다. `urdf_temp4`의 현재 2축
-구성에서는 motor 0이 joint1(베이스 yaw), motor 1이 joint2(숄더 pitch)입니다. 그립을 누른 동안
-컨트롤러 `y` 이동이 joint1/motor 0, 사용자가 느끼는 상하 방향인 컨트롤러 `z` 이동이
-joint2/motor 1을 상대 제어합니다. 그립을 놓거나 추적이 끊기면 두 모터를 disable합니다. 축과
+오른쪽 그립을 누르는 순간 현재 모터/컨트롤러 위치를 기준점으로 잡습니다. Quest 원시 WebXR 좌표는
+handoff 규약에 따라 RUB(`x=오른쪽, y=위, z=뒤`)에서 로봇 FLU(`x=앞, y=왼쪽, z=위`)로 변환됩니다.
+그 후 robot `y` 이동이 joint1, robot `z` 이동이 joint2를 상대 제어합니다. 그립을 놓거나 추적이
+끊기면 두 모터를 disable합니다. 축과
 방향은 `--motor0-axis`, `--motor1-axis`, `--motor0-sign`, `--motor1-sign`으로 바꿀 수 있습니다.
-명령 위치는 캘리브레이션 범위뿐 아니라 `urdf_temp4`의 joint1 ±3.1067 rad, joint2 ±1.7453 rad
+명령 위치는 캘리브레이션 범위뿐 아니라 handoff 현재 실물용 3축 URDF의 joint1 ±3.1067 rad, joint2 ±1.7453 rad
 범위로도 제한되며 두 범위의 교집합만 사용합니다.
 
 ### 2모터 + AmazingHand full-grasp 통합
@@ -271,6 +272,26 @@ AmazingHand USB 직렬 어댑터를 연결한 뒤 장치 이름을 확인합니�
 ls /dev/ttyACM* /dev/ttyUSB*
 uv sync --extra hardware
 ```
+
+현재 2축 팔을 Quest controller angle-following으로 사용할 때는 `kinematics` extra도 설치하고
+`--robot.arm_control_mode=ik`를 지정합니다. 이 모드는 `handoff_orientation.tar.gz` 안에서
+현재 실물용으로 표시된 `orientation/urdf/robot_arm_temp.urdf`를 읽고 joint1/joint2만 활성화합니다.
+J4/J5 쪽 링크가 빠진 이 3축 모델에서 joint3만 `orientation/config/arm_temp.json`의 홈값
+`-0.042588 rad`에 고정합니다. end effector는 손목에 붙은 `hand_mount`입니다. 기본
+`direct` 모드는 기존 축별 검증용으로 유지되지만 `roboparty-record`의 현재 2축 구성은 IK 모드를
+필수로 검사합니다.
+
+임시 2축 IK는 임의의 6D pose를 풀 수 없으므로 **controller 상대 회전 → `hand_mount` 상대 회전**을
+우선하고 controller `xyz` 이동은 팔 목표에서 제외합니다. URDF의 J1=-Z, J2=-X 회전축으로
+controller 상대 회전을 직접 투영하므로 controller를 약 45° 숙이면 J2도 약 45° 목표를 갖습니다. 매 frame의 안전 제한은 이전
+명령 target이 아니라 최신 measured J1/J2에서 계산하므로 별도의 target backlog가 누적되지 않습니다.
+5축이 완성되면 같은 LeRobot processor 경계 안에서 full position+orientation IK로 교체합니다.
+
+```bash
+uv sync --extra hardware --extra kinematics --extra viz
+```
+
+`viz`는 별도 패널을 추가하는 것이 아니라 LeRobot이 기본 지원하는 Rerun backend를 설치합니다.
 
 `--all-extras`는 배포 장비에서 사용하지 않습니다. Linux x86_64에서는 LeRobot 자체의 기본
 `torch`/`torchvision` 의존성이 CUDA 12.8 패키지를 설치하므로, RTX 학습/추론 서버에서는 큰
@@ -288,32 +309,66 @@ roboparty-teleoperate \
   --robot.can_port=/dev/ttyACM0 \
   --robot.can_interface=slcan \
   --robot.two_motor_calibration_path=config/right_arm_two_motor.json \
+  --robot.arm_control_mode=ik \
   --robot.cameras='{front: {type: opencv, index_or_path: /dev/video0, width: 640, height: 480, fps: 30}, wrist: {type: opencv, index_or_path: /dev/video1, width: 640, height: 480, fps: 30}}' \
   --teleop.type=quest2_vuer \
   --teleop.id=quest2 \
   --teleop.cert_file=cert.pem \
   --teleop.key_file=key.pem \
-  --fps=20 \
+  --fps=15 \
   --display_data=true
 ```
 
-- 오른쪽 grip: 팔 두 축 clutch. 놓거나 추적이 끊기면 팔 torque를 해제합니다.
-- 오른쪽 trigger: grip과 독립적으로 손을 연속 제어합니다. `0%=open`, `100%=full grasp`입니다.
+- 시작 및 episode reset 직후: 유효한 Quest tracking이 들어오면 J1·J2가 현재 자세에서 자동 engage합니다.
+- 오른쪽 grip/squeeze: 팔 활성 상태와 무관합니다. 잡거나 놓아도 torque와 IK 상대 기준점을 재설정하지 않습니다.
+- 오른쪽 trigger: 손을 연속 제어합니다. `0%=open`, `100%=full grasp`입니다.
 - Quest 추적이 끊기면 손은 마지막 grasp를 유지합니다.
-- B/A: 팔 disarm/rearm이며 손 grasp에는 영향을 주지 않습니다.
+- B/A: 팔 disarm/rearm이며 손 grasp에는 영향을 주지 않습니다. B 뒤에는 A를 눌러 새 현재 자세에서 다시 engage합니다.
+- Quest tracking이 끊기면 팔 torque를 해제하며, tracking 복귀 시 현재 자세에서 상대 IK 기준을 다시 잡습니다.
+- controller 회전은 시작 자세에 대한 상대 `hand_mount` 회전으로 J1/J2에 반영됩니다. controller 위치 이동만으로는 임시 2축 팔을 움직이지 않습니다.
 - 종료 시 팔과 손 torque를 모두 해제합니다.
 
-먼저 Hub 업로드 없이 짧은 episode를 기록합니다.
+> `roboparty-quest-two-motor-teleop` 단독 진단 CLI는 기존 hold-to-run grip clutch를 유지합니다.
+> 위 A/B 동작은 `roboparty-teleoperate`와 `roboparty-record`의 2모터 + AmazingHand 통합 processor에 적용됩니다.
+
+### Mac 키보드 + Rerun으로 수동 episode 기록
+
+LeLab이나 별도 control panel은 사용하지 않습니다. 실시간 Quest/IK/Robot/dataset loop는 Jetson에서
+실행하고, Mac은 SSH 터미널의 LeRobot 키 입력과 Rerun viewer만 담당합니다.
+
+Mac의 첫 번째 터미널에서 Rerun viewer를 loopback에만 엽니다.
 
 ```bash
+uv tool install 'rerun-sdk==0.33.1'
+rerun --bind 127.0.0.1 --port 9876
+```
+
+Mac의 두 번째 터미널에서 Rerun 포트를 Jetson으로 reverse-forward하며 SSH에 접속합니다. 현재 Jetson
+LAN 주소가 바뀌었으면 `10.175.216.203`만 실제 주소로 교체합니다.
+
+```bash
+ssh -t -o ExitOnForwardFailure=yes \
+  -R 9876:127.0.0.1:9876 \
+  dong@10.175.216.203
+```
+
+그 SSH 터미널 안에서 Hub 업로드 없이 수동 episode를 기록합니다. LeRobot의 숫자 parser와 기존
+record loop가 `inf`를 그대로 처리하므로 별도 timing 구현 없이 키를 누를 때까지 각 phase가 계속됩니다.
+`0`은 기존 LeRobot 의미대로 해당 phase를 생략합니다.
+
+```bash
+cd /home/dong/echo_v4
+source .venv/bin/activate
+
 roboparty-record \
   --robot.type=roboparty_two_motor_amazing_hand \
   --robot.id=two_motor_amazing_hand \
-  --robot.hand_port=/dev/ttyUSB1 \
-  --robot.can_port=/dev/ttyACM0 \
+  --robot.hand_port=/dev/serial/by-id/usb-1a86_USB_Single_Serial_5C63050237-if00 \
+  --robot.can_port=/dev/serial/by-id/usb-Openlight_Labs_CANable2_b158aa7_github.com_normaldotcom_canable2.git_2070388B3136-if00 \
   --robot.can_interface=slcan \
   --robot.two_motor_calibration_path=config/right_arm_two_motor.json \
-  --robot.cameras='{front: {type: opencv, index_or_path: /dev/video0, width: 640, height: 480, fps: 30}, wrist: {type: opencv, index_or_path: /dev/video1, width: 640, height: 480, fps: 30}}' \
+  --robot.arm_control_mode=ik \
+  --robot.cameras='{front: {type: opencv, index_or_path: /dev/v4l/by-id/usb-046d_HD_Pro_Webcam_C920-video-index0, width: 640, height: 480, fps: 30}, wrist: {type: opencv, index_or_path: /dev/v4l/by-path/platform-3610000.usb-usb-0:2:1.3-video-index0, width: 640, height: 480, fps: 30}}' \
   --teleop.type=quest2_vuer \
   --teleop.id=quest2 \
   --teleop.cert_file=cert.pem \
@@ -321,55 +376,43 @@ roboparty-record \
   --dataset.repo_id=local/roboparty-two-motor-amazing-hand \
   --dataset.num_episodes=2 \
   --dataset.single_task='Grasp the object with the right hand' \
-  --dataset.episode_time_s=20 \
-  --dataset.reset_time_s=10 \
-  --dataset.fps=20 \
+  --dataset.episode_time_s=inf \
+  --dataset.reset_time_s=inf \
+  --dataset.fps=15 \
   --dataset.push_to_hub=false \
-  --display_data=true
+  --display_data=true \
+  --display_mode=rerun \
+  --display_ip=127.0.0.1 \
+  --display_port=9876
 ```
+
+키 입력은 **Rerun 창이 아니라 Mac의 SSH 터미널에 focus를 둔 상태**에서 합니다.
+
+| 키 | LeRobot 기록 동작 |
+|---|---|
+| `→` | 현재 recording을 끝내고 reset으로 이동, reset 중에는 다음 episode 시작 |
+| `←` | 현재 episode buffer를 폐기하고 다시 기록 |
+| `ESC` | 기록 세션을 종료하고 저장된 dataset을 finalize |
+
+SSH 환경에서 방향키 escape sequence가 가로채지는 경우에는 LeRobot에 이미 포함된 동등 키
+`n`(다음), `r`(재기록), `q`(종료)를 사용합니다. Rerun은 카메라·J1/J2 state·최종 action을 보여줄
+뿐이고 기록 단계 전환이나 로봇 명령을 직접 처리하지 않습니다.
 
 이 구성의 LeRobot action/state 순서는 다음 3축으로 고정됩니다.
 
 ```text
-motor_0.pos motor_1.pos right_hand_grasp.pos
+right_arm_joint_1.pos right_arm_joint_2.pos right_hand_grasp.pos
 ```
 
 실제 dataset을 Hub에 올릴 때는 `--dataset.push_to_hub=true --dataset.private=true`와 본인의
 `<HF_USER>/<DATASET_NAME>` repo ID를 사용합니다.
 
-손 구현은 8서보 통신 계층과 현재의 `FullGraspMapper`가 분리되어 있습니다. 추후 자유 손 추적은 새
-8축 mapper를 추가하고, 5축 팔은 기존 `roboparty_right_arm` 계층과 같은 방식으로 결합하여 transport를
-다시 구현하지 않고 확장합니다.
+현재 수집 계약은 J1·J2와 단일 full-grasp 세 축으로 고정합니다. J3–J5 또는 개별 손가락 축을 추가할
+경우 기존 dataset과 섞지 않고 별도의 action schema와 dataset 버전을 만들어야 합니다.
 
-```bash
-export HF_USER=<huggingface-user>
-roboparty-record \
-  --robot.type=roboparty_right_arm \
-  --robot.id=right_arm \
-  --robot.bridge_host=100.96.41.100 \
-  --robot.gripper_open_rad=0.0 \
-  --robot.gripper_closed_rad=1.0 \
-  --robot.cameras='{front: {type: opencv, index_or_path: 0, width: 640, height: 480, fps: 30}, wrist: {type: opencv, index_or_path: 1, width: 640, height: 480, fps: 30}}' \
-  --teleop.type=quest2_vuer \
-  --teleop.id=quest2 \
-  --teleop.cert_file=cert.pem \
-  --teleop.key_file=key.pem \
-  --dataset.repo_id=${HF_USER}/roboparty-right-arm-xr \
-  --dataset.num_episodes=50 \
-  --dataset.single_task='Pick up the object with the right arm' \
-  --dataset.episode_time_s=30 \
-  --dataset.reset_time_s=10 \
-  --dataset.fps=30 \
-  --display_data=true
-```
-
-저장되는 action은 Quest pose가 아니라 LeRobot 표준 관절 action입니다.
-
-```text
-right_motor0.pos ... right_motor4.pos right_gripper.pos
-```
-
-observation에는 같은 관절 상태와 `front`, `wrist` RGB 영상이 들어갑니다. 따라서 표준 ACT 학습과 `lerobot-record` 대신 정책 rollout 도구를 그대로 사용할 수 있습니다.
+저장되는 action은 Quest pose가 아니라 위의 J1·J2·grasp 관절 action이며, observation에는 같은 관절 상태와
+설정한 RGB 카메라 영상이 들어갑니다. 따라서 이 3축 schema를 유지한 채 LeRobot의 표준 ACT 학습 및
+정책 rollout 흐름을 사용할 수 있습니다.
 
 ## 5. ACT 학습 예시
 
@@ -377,10 +420,10 @@ LeRobot 버전에 맞는 `lerobot-train`을 사용합니다.
 
 ```bash
 lerobot-train \
-  --dataset.repo_id=${HF_USER}/roboparty-right-arm-xr \
+  --dataset.repo_id=${HF_USER}/roboparty-j1-j2-amazing-hand \
   --policy.type=act \
-  --output_dir=outputs/train/roboparty_right_act \
-  --job_name=roboparty_right_act \
+  --output_dir=outputs/train/roboparty_j1_j2_hand_act \
+  --job_name=roboparty_j1_j2_hand_act \
   --policy.device=mps
 ```
 

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import logging
 import math
+import time
 from contextlib import suppress
 from functools import cached_property
 from typing import Any
@@ -12,6 +14,7 @@ from lerobot.robots.robot import Robot
 from .amazing_hand import AmazingHandBus, FullGraspMapper
 from .config import (
     HAND_GRASP_JOINT,
+    TWO_MOTOR_CALIBRATION_NAMES,
     TWO_MOTOR_HAND_JOINTS,
     TWO_MOTOR_JOINTS,
     RobopartyTwoMotorAmazingHandConfig,
@@ -26,6 +29,8 @@ from .two_motor_quest_teleop import (
 )
 
 ARM_TORQUE_CONTROL_KEY = "control.arm_torque_enabled"
+
+logger = logging.getLogger(__name__)
 
 
 class RobopartyTwoMotorAmazingHand(Robot):
@@ -44,8 +49,10 @@ class RobopartyTwoMotorAmazingHand(Robot):
         if len(self.motors) != 2:
             raise ValueError(f"expected exactly 2 calibrated motors, found {len(self.motors)}")
         names = tuple(str(motor["name"]) for motor in self.motors)
-        if names != TWO_MOTOR_JOINTS:
-            raise ValueError(f"calibrated motor names must be {TWO_MOTOR_JOINTS}, found {names}")
+        if names != TWO_MOTOR_CALIBRATION_NAMES:
+            raise ValueError(
+                f"calibrated motor names must be {TWO_MOTOR_CALIBRATION_NAMES}, found {names}"
+            )
         self.adapter = calibration["adapter"]
         if config.can_port is not None:
             self.adapter["port"] = config.can_port
@@ -64,6 +71,8 @@ class RobopartyTwoMotorAmazingHand(Robot):
         self._can_bus: Any | None = None
         self._arm_torque_enabled = False
         self._last_arm_positions: np.ndarray | None = None
+        self._last_arm_targets: np.ndarray | None = None
+        self._last_arm_diagnostic_s = 0.0
 
     @cached_property
     def observation_features(self) -> dict[str, type | tuple[int, int, int]]:
@@ -129,6 +138,7 @@ class RobopartyTwoMotorAmazingHand(Robot):
             raise
         self._can_bus = bus
         self._arm_torque_enabled = False
+        self._last_arm_targets = None
 
     def calibrate(self) -> None:
         return None
@@ -141,8 +151,10 @@ class RobopartyTwoMotorAmazingHand(Robot):
         arm_positions = _read_positions(bus, self.motors, self.config.can_timeout_s)
         self._last_arm_positions = arm_positions
         observation: dict[str, Any] = {
-            f"{motor['name']}.pos": normalize_position(float(position), motor)
-            for motor, position in zip(self.motors, arm_positions, strict=True)
+            f"{joint}.pos": normalize_position(float(position), motor)
+            for joint, motor, position in zip(
+                TWO_MOTOR_JOINTS, self.motors, arm_positions, strict=True
+            )
         }
         hand_positions = self.hand.read_positions()
         observation[f"{HAND_GRASP_JOINT}.pos"] = self.hand_mapper.observation(hand_positions)
@@ -167,24 +179,41 @@ class RobopartyTwoMotorAmazingHand(Robot):
 
         requested_arm = np.asarray(
             [
-                denormalize_position(float(action[f"{motor['name']}.pos"]), motor)
-                for motor in self.motors
+                denormalize_position(float(action[f"{joint}.pos"]), motor)
+                for joint, motor in zip(TWO_MOTOR_JOINTS, self.motors, strict=True)
             ],
             dtype=float,
         )
-        bounded_arm = np.clip(
-            requested_arm,
-            self._last_arm_positions - self.config.max_relative_target_rad,
-            self._last_arm_positions + self.config.max_relative_target_rad,
-        )
         arm_requested = bool(float(action.get(ARM_TORQUE_CONTROL_KEY, 1.0)))
         grasp = float(np.clip(float(action[f"{HAND_GRASP_JOINT}.pos"]), 0.0, 100.0))
+
+        if arm_requested:
+            previous_target = (
+                self._last_arm_positions
+                if self._last_arm_targets is None
+                else self._last_arm_targets
+            )
+            rate_limited_arm = np.clip(
+                requested_arm,
+                previous_target - self.config.max_relative_target_rad,
+                previous_target + self.config.max_relative_target_rad,
+            )
+            bounded_arm = np.clip(
+                rate_limited_arm,
+                self._last_arm_positions - self.config.max_tracking_error_rad,
+                self._last_arm_positions + self.config.max_tracking_error_rad,
+            )
+            self._last_arm_targets = bounded_arm.copy()
+        else:
+            bounded_arm = self._last_arm_positions.copy()
+            self._last_arm_targets = None
 
         if self.config.command_enabled:
             if arm_requested:
                 if not self._arm_torque_enabled:
                     _send_simple_command(bus, self._motor_ids, CAN_CMD_ENABLE)
                     self._arm_torque_enabled = True
+                    logger.info("Two-motor arm torque enabled")
                 _send_targets(
                     bus,
                     self.motors,
@@ -195,11 +224,28 @@ class RobopartyTwoMotorAmazingHand(Robot):
             elif self._arm_torque_enabled:
                 _send_simple_command(bus, self._motor_ids, CAN_CMD_DISABLE)
                 self._arm_torque_enabled = False
+                logger.info("Two-motor arm torque disabled")
             self.hand.write_positions(self.hand_mapper.targets_rad(grasp))
 
+        now = time.monotonic()
+        if now - self._last_arm_diagnostic_s >= 1.0:
+            logger.info(
+                "Two-motor command: request=%d torque=%d measured=(%+.4f,%+.4f) "
+                "requested=(%+.4f,%+.4f) bounded=(%+.4f,%+.4f) grasp=%.1f",
+                arm_requested,
+                self._arm_torque_enabled,
+                *self._last_arm_positions,
+                *requested_arm,
+                *bounded_arm,
+                grasp,
+            )
+            self._last_arm_diagnostic_s = now
+
         sent = {
-            f"{motor['name']}.pos": normalize_position(float(position), motor)
-            for motor, position in zip(self.motors, bounded_arm, strict=True)
+            f"{joint}.pos": normalize_position(float(position), motor)
+            for joint, motor, position in zip(
+                TWO_MOTOR_JOINTS, self.motors, bounded_arm, strict=True
+            )
         }
         sent[f"{HAND_GRASP_JOINT}.pos"] = grasp
         return sent
@@ -218,6 +264,7 @@ class RobopartyTwoMotorAmazingHand(Robot):
         self._can_bus = None
         self._arm_torque_enabled = False
         self._last_arm_positions = None
+        self._last_arm_targets = None
 
     @property
     def _motor_ids(self) -> list[int]:

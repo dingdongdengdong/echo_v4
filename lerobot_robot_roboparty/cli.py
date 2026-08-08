@@ -29,6 +29,15 @@ def _make_quest_processor(robot_config, teleop_config):
     return make_quest_processor(robot_config, teleop_config)
 
 
+def _validate_record_configs(robot_config, teleop_config) -> None:
+    _validate_configs(robot_config, teleop_config)
+    if (
+        isinstance(robot_config, RobopartyTwoMotorAmazingHandConfig)
+        and robot_config.arm_control_mode != "ik"
+    ):
+        raise ValueError("two-motor Quest recording requires --robot.arm_control_mode=ik")
+
+
 @parser.wrap()
 def _teleoperate(cfg: TeleoperateConfig) -> None:
     init_logging()
@@ -75,7 +84,7 @@ def _teleoperate(cfg: TeleoperateConfig) -> None:
 def _record(cfg: RecordConfig):
     if cfg.teleop is None:
         raise ValueError("recording requires --teleop.type=quest2_vuer")
-    _validate_configs(cfg.robot, cfg.teleop)
+    _validate_record_configs(cfg.robot, cfg.teleop)
     return record(cfg, teleop_action_processor=_make_quest_processor(cfg.robot, cfg.teleop))
 
 

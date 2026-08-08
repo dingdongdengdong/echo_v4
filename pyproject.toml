@@ -25,10 +25,14 @@ hardware = [
   "rustypot>=1.4,<2",
 ]
 kinematics = [
-  # Pin 3.7 macOS wheels are linked against urdfdom 4.x.
-  "cmeel-urdfdom>=4,<5; platform_system == 'Darwin'",
-  "cmeel-tinyxml2>=10,<11; platform_system == 'Darwin'",
+  # Pin 3.7 wheels are linked against the urdfdom 4.x / tinyxml2 10.x ABI.
+  "cmeel-urdfdom>=4,<5",
+  "cmeel-tinyxml2>=10,<11",
   "pin>=3.7,<3.8",
+]
+viz = [
+  # Reuse LeRobot's supported live visualization stack (Rerun by default).
+  "lerobot[viz]>=0.6.1,<0.7",
 ]
 test = [
   "pytest>=8,<10",
@@ -43,10 +47,14 @@ roboparty-can-probe = "lerobot_robot_roboparty.can_probe:main"
 roboparty-calibrate-two-motors = "lerobot_robot_roboparty.two_motor_calibration:main"
 roboparty-quest-two-motor-check = "lerobot_robot_roboparty.two_motor_quest_check:main"
 roboparty-quest-two-motor-teleop = "lerobot_robot_roboparty.two_motor_quest_teleop:main"
+roboparty-robot-arm-vr-bridge = "lerobot_robot_roboparty.robot_arm_vr_bridge:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["lerobot_robot_roboparty*", "televuer*"]
+
+[tool.setuptools.package-data]
+lerobot_robot_roboparty = ["handoff_orientation.tar.gz"]
 
 [tool.ruff]
 line-length = 110

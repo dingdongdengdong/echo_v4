@@ -9,7 +9,7 @@ from lerobot.lerobot_types import RobotAction, RobotObservation, TransitionKey
 from lerobot.processor.converters import robot_action_observation_to_transition, transition_to_robot_action
 from lerobot.processor.pipeline import RobotActionProcessorStep, RobotProcessorPipeline
 
-from .clutch import EngageRelativeClutch, quaternion_to_matrix
+from .clutch import EngageRelativeClutch, quaternion_to_matrix, webxr_pose_to_robot
 from .config import (
     ALL_JOINTS,
     DEFAULT_ARM_LIMITS,
@@ -128,8 +128,7 @@ class QuestRightArmProcessor(RobotActionProcessorStep):
     def _hold(measured: np.ndarray) -> RobotAction:
         return {f"{joint}.pos": float(measured[index]) for index, joint in enumerate(ALL_JOINTS)}
 
-    @staticmethod
-    def _controller_pose(action: RobotAction) -> np.ndarray:
+    def _controller_pose(self, action: RobotAction) -> np.ndarray:
         position = np.array(
             [action["controller.x"], action["controller.y"], action["controller.z"]], dtype=float
         )
@@ -145,7 +144,11 @@ class QuestRightArmProcessor(RobotActionProcessorStep):
         pose = np.eye(4)
         pose[:3, :3] = quaternion_to_matrix(quaternion)
         pose[:3, 3] = position
-        return pose
+        return webxr_pose_to_robot(
+            pose,
+            base_yaw_deg=self.teleop_config.base_yaw_deg,
+            mirror=self.teleop_config.mirror,
+        )
 
 
 def make_quest_processor(

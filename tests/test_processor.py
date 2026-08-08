@@ -74,7 +74,7 @@ def test_relative_motion_and_gripper_are_rate_limited(tmp_path) -> None:
         (
             action(
                 **{
-                    "controller.x": 1.2,
+                    "controller.z": 2.8,
                     "controller.squeeze": 1.0,
                     "controller.trigger": 1.0,
                 }

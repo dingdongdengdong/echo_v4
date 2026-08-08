@@ -3,7 +3,7 @@ import numpy as np
 from lerobot_robot_roboparty.can_probe import decode_dm4340p_state
 from lerobot_robot_roboparty.two_motor_quest_teleop import (
     DEFAULT_JOINT_AXES,
-    TEMP_ARM4_JOINT_LIMITS_RAD,
+    RIGHT_ARM_JOINT_LIMITS_RAD,
     encode_mit_position,
     logical_to_raw_position,
     relative_targets,
@@ -45,7 +45,7 @@ def test_relative_targets_use_selected_axes_limit_step_and_calibration_range() -
     assert np.allclose(targets, [0.93, -0.03])
 
 
-def test_temp_arm4_defaults_map_vertical_motion_to_joint2() -> None:
+def test_handoff_defaults_map_robot_vertical_motion_to_joint2() -> None:
     targets = relative_targets(
         controller_position=np.array([0.0, 0.0, 0.2]),
         controller_origin=np.zeros(3),
@@ -60,7 +60,7 @@ def test_temp_arm4_defaults_map_vertical_motion_to_joint2() -> None:
     assert np.allclose(targets, [0.0, 0.2])
 
 
-def test_temp_arm4_urdf_limits_override_wider_calibration_ranges() -> None:
+def test_handoff_urdf_limits_override_wider_calibration_ranges() -> None:
     wide_range_motors = [motor("joint1", -4.0, 4.0), motor("joint2", -4.0, 4.0)]
     upper_targets = relative_targets(
         controller_position=np.array([0.0, 10.0, 10.0]),
@@ -72,6 +72,6 @@ def test_temp_arm4_urdf_limits_override_wider_calibration_ranges() -> None:
         signs=(1.0, 1.0),
         gain_rad_per_m=1.0,
         max_step_rad=20.0,
-        joint_limits=TEMP_ARM4_JOINT_LIMITS_RAD,
+        joint_limits=RIGHT_ARM_JOINT_LIMITS_RAD,
     )
     assert np.allclose(upper_targets, [3.106686069, 1.745329252])
