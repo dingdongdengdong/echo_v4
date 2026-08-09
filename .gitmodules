@@ -4,3 +4,6 @@
 [submodule "third_party/lerobot"]
 	path = third_party/lerobot
 	url = https://github.com/huggingface/lerobot.git
+[submodule "third_party/robot_arm_vr"]
+	path = third_party/robot_arm_vr
+	url = https://github.com/dingdongdengdong/robot_arm_vr.git
