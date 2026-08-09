@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import math
+import threading
 import time
 from contextlib import suppress
 from functools import cached_property
@@ -73,6 +74,12 @@ class RobopartyTwoMotorAmazingHand(Robot):
         self._last_arm_positions: np.ndarray | None = None
         self._last_arm_targets: np.ndarray | None = None
         self._last_arm_diagnostic_s = 0.0
+        self._last_hand_grasp: float | None = None
+        self._hand_feedback_healthy = False
+        self._hand_io_lock = threading.Lock()
+        self._hand_state_lock = threading.Lock()
+        self._hand_feedback_stop = threading.Event()
+        self._hand_feedback_thread: threading.Thread | None = None
 
     @cached_property
     def observation_features(self) -> dict[str, type | tuple[int, int, int]]:
@@ -122,6 +129,7 @@ class RobopartyTwoMotorAmazingHand(Robot):
             _send_simple_command(bus, self._motor_ids, CAN_CMD_DISABLE)
             self._last_arm_positions = _read_positions(bus, self.motors, self.config.can_timeout_s)
             self.hand.connect()
+            self._read_hand_feedback_once(require_success=True)
             for camera in self.cameras.values():
                 camera.connect()
                 connected_cameras.append(camera)
@@ -139,6 +147,7 @@ class RobopartyTwoMotorAmazingHand(Robot):
         self._can_bus = bus
         self._arm_torque_enabled = False
         self._last_arm_targets = None
+        self._start_hand_feedback()
 
     def calibrate(self) -> None:
         return None
@@ -156,8 +165,15 @@ class RobopartyTwoMotorAmazingHand(Robot):
                 TWO_MOTOR_JOINTS, self.motors, arm_positions, strict=True
             )
         }
-        hand_positions = self.hand.read_positions()
-        observation[f"{HAND_GRASP_JOINT}.pos"] = self.hand_mapper.observation(hand_positions)
+        if self._hand_feedback_thread is None:
+            # Unit tests and explicit non-connected callers keep synchronous
+            # behavior. Normal runtime always consumes the background cache.
+            self._read_hand_feedback_once(require_success=self._last_hand_grasp is None)
+        with self._hand_state_lock:
+            hand_grasp = self._last_hand_grasp
+        if hand_grasp is None:
+            raise ConnectionError("AmazingHand has no valid feedback sample")
+        observation[f"{HAND_GRASP_JOINT}.pos"] = hand_grasp
         for name, camera in self.cameras.items():
             observation[name] = camera.async_read(timeout_ms=1000)
         return observation
@@ -225,7 +241,20 @@ class RobopartyTwoMotorAmazingHand(Robot):
                 _send_simple_command(bus, self._motor_ids, CAN_CMD_DISABLE)
                 self._arm_torque_enabled = False
                 logger.info("Two-motor arm torque disabled")
-            self.hand.write_positions(self.hand_mapper.targets_rad(grasp))
+            with self._hand_state_lock:
+                hand_feedback_healthy = self._hand_feedback_healthy
+            if hand_feedback_healthy:
+                # A slow or timed-out hand serial transaction must never stall
+                # the arm and dataset loop. Retry the grasp on a later frame.
+                hand_io_acquired = self._hand_io_lock.acquire(blocking=False)
+                try:
+                    if hand_io_acquired:
+                        self.hand.write_positions(self.hand_mapper.targets_rad(grasp))
+                except (ConnectionError, RuntimeError) as exc:
+                    self._mark_hand_fault("command", exc)
+                finally:
+                    if hand_io_acquired:
+                        self._hand_io_lock.release()
 
         now = time.monotonic()
         if now - self._last_arm_diagnostic_s >= 1.0:
@@ -251,6 +280,7 @@ class RobopartyTwoMotorAmazingHand(Robot):
         return sent
 
     def disconnect(self) -> None:
+        self._stop_hand_feedback()
         for camera in self.cameras.values():
             if camera.is_connected:
                 with suppress(Exception):
@@ -265,6 +295,9 @@ class RobopartyTwoMotorAmazingHand(Robot):
         self._arm_torque_enabled = False
         self._last_arm_positions = None
         self._last_arm_targets = None
+        with self._hand_state_lock:
+            self._last_hand_grasp = None
+            self._hand_feedback_healthy = False
 
     @property
     def _motor_ids(self) -> list[int]:
@@ -274,3 +307,63 @@ class RobopartyTwoMotorAmazingHand(Robot):
         if self._can_bus is None:
             raise ConnectionError("two-motor CAN bus is not connected")
         return self._can_bus
+
+    def _mark_hand_fault(self, operation: str, exc: Exception) -> None:
+        with self._hand_state_lock:
+            was_healthy = self._hand_feedback_healthy
+            self._hand_feedback_healthy = False
+        if was_healthy:
+            logger.warning(
+                "AmazingHand %s failed; holding the last grasp and suppressing hand commands: %s",
+                operation,
+                exc,
+            )
+
+    def _read_hand_feedback_once(self, *, require_success: bool) -> None:
+        try:
+            with self._hand_io_lock:
+                hand_positions = self.hand.read_positions()
+            hand_grasp = self.hand_mapper.observation(hand_positions)
+        except (ConnectionError, RuntimeError) as exc:
+            with self._hand_state_lock:
+                has_cached_sample = self._last_hand_grasp is not None
+            self._mark_hand_fault("feedback", exc)
+            if require_success or not has_cached_sample:
+                raise
+            return
+
+        with self._hand_state_lock:
+            was_healthy = self._hand_feedback_healthy
+            self._last_hand_grasp = hand_grasp
+            self._hand_feedback_healthy = True
+        if not was_healthy:
+            logger.info("AmazingHand feedback recovered; resuming hand commands")
+
+    def _start_hand_feedback(self) -> None:
+        if self._hand_feedback_thread is not None:
+            return
+        self._hand_feedback_stop.clear()
+        self._hand_feedback_thread = threading.Thread(
+            target=self._hand_feedback_loop,
+            name="amazing-hand-feedback",
+            daemon=True,
+        )
+        self._hand_feedback_thread.start()
+
+    def _stop_hand_feedback(self) -> None:
+        thread = self._hand_feedback_thread
+        if thread is None:
+            return
+        self._hand_feedback_stop.set()
+        thread.join(timeout=max(1.0, self.config.hand_timeout_s * 2.0))
+        if thread.is_alive():
+            logger.warning("AmazingHand feedback thread did not stop before timeout")
+        self._hand_feedback_thread = None
+
+    def _hand_feedback_loop(self) -> None:
+        period_s = 1.0 / self.config.hand_feedback_hz
+        while not self._hand_feedback_stop.wait(period_s):
+            # Connect validates the first sample. Later faults retain the last
+            # valid observation so an episode can continue without corruption.
+            with suppress(ConnectionError, RuntimeError):
+                self._read_hand_feedback_once(require_success=False)

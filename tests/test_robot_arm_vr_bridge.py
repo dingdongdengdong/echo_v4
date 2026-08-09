@@ -190,7 +190,7 @@ def test_grasp_fallback_interpolates_in_servo_space() -> None:
     )
 
 
-def test_hand_sink_prefers_servo_command_and_deduplicates_unchanged_target() -> None:
+def test_hand_sink_restores_previous_full_grasp_motion_and_deduplicates() -> None:
     class FakeHandBus:
         def __init__(self) -> None:
             self.commands = []
@@ -205,4 +205,7 @@ def test_hand_sink_prefers_servo_command_and_deduplicates_unchanged_target() -> 
     assert sink.forward(command) is True
     assert sink.forward(command) is False
     assert len(bus.commands) == 1
-    np.testing.assert_allclose(list(bus.commands[0].values()), [0.1] * 8)
+    np.testing.assert_allclose(
+        list(bus.commands[0].values()),
+        np.radians([82.5, -82.5] * 4),
+    )

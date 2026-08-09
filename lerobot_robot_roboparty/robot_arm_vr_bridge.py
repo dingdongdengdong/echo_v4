@@ -11,7 +11,7 @@ from typing import Any
 
 import numpy as np
 
-from .amazing_hand import HAND_SERVO_IDS, AmazingHandBus
+from .amazing_hand import HAND_SERVO_IDS, AmazingHandBus, FullGraspMapper
 from .can_probe import (
     DM4340P_POSITION_LIMIT_RAD,
     DM4340P_TORQUE_LIMIT_NM,
@@ -86,22 +86,28 @@ def grasp_to_logical_servo(grasp: float) -> np.ndarray:
 
 
 class AmazingHandCommandSink:
-    """Forward new UDP hand targets without coupling them to arm RUN/HOLD state."""
+    """Forward the proven LeRobot full-grasp motion from the Quest trigger.
+
+    robot_arm_vr also sends an eight-servo visual-model pose, but that pose is
+    not the gripping motion previously used on the real AmazingHand.  Prefer
+    the scalar grasp command and restore FullGraspMapper's 0..110 degree motion.
+    """
 
     def __init__(self, bus: AmazingHandBus) -> None:
         self.bus = bus
+        self.mapper = FullGraspMapper()
         self._last_target: tuple[float, ...] | None = None
 
     def forward(self, command: Any | None) -> bool:
         if command is None:
             return False
-        if command.servo is not None:
+        if command.grasp is not None:
+            positions = self.mapper.targets_rad(float(command.grasp) * 100.0)
+        elif command.servo is not None:
             logical = np.asarray(command.servo, dtype=float)
-        elif command.grasp is not None:
-            logical = grasp_to_logical_servo(float(command.grasp))
+            positions = logical_servo_to_bus_positions(logical)
         else:
             return False
-        positions = logical_servo_to_bus_positions(logical)
         target = tuple(positions[servo_id] for servo_id in HAND_SERVO_IDS)
         if self._last_target is not None and np.allclose(target, self._last_target, atol=1e-4):
             return False
@@ -457,7 +463,6 @@ def main() -> int:
         parser.error("velocity scale, state rate, and motor rate must be positive")
     if args.hand_baudrate <= 0 or args.hand_timeout <= 0 or not 1 <= args.hand_speed <= 6:
         parser.error("hand baudrate/timeout must be positive and hand speed must be 1..6")
-
     ArmConfig, FakeJetson, ports = _load_robot_arm_vr()
     cfg = ArmConfig.load(args.config)
     if cfg.dof < 2:

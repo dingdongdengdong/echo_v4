@@ -331,6 +331,7 @@ def test_robot_exposes_three_dataset_axes_and_keeps_torque_signal_internal(tmp_p
     robot._can_bus = FakeCanBus()
     robot.hand = FakeHand()
     robot._last_arm_positions = np.zeros(2)
+    robot._hand_feedback_healthy = True
     simple_commands = []
     targets = []
     monkeypatch.setattr(
@@ -441,3 +442,118 @@ def test_robot_uses_lerobot_async_camera_reads_for_control_loop(tmp_path, monkey
     assert observation["wrist"] is wrist.value
     assert front.async_timeouts == [1000]
     assert wrist.async_timeouts == [1000]
+
+
+def test_runtime_observation_uses_cached_hand_feedback_without_serial_read(
+    tmp_path, monkeypatch
+) -> None:
+    robot_config, _ = configs(tmp_path)
+    robot = RobopartyTwoMotorAmazingHand(robot_config)
+    robot._can_bus = FakeCanBus()
+    hand = FakeHand()
+    hand.read_positions = lambda: (_ for _ in ()).throw(
+        AssertionError("the arm loop must not synchronously read AmazingHand")
+    )
+    robot.hand = hand
+    robot._hand_feedback_thread = object()
+    robot._last_hand_grasp = 42.0
+    monkeypatch.setattr(
+        "lerobot_robot_roboparty.two_motor_amazing_hand_robot._read_positions",
+        lambda bus, motors, timeout: np.zeros(2),
+    )
+
+    current = robot.get_observation()
+
+    assert current["right_hand_grasp.pos"] == pytest.approx(42.0)
+
+
+def test_busy_hand_feedback_never_blocks_or_suppresses_arm_command(tmp_path, monkeypatch) -> None:
+    robot_config, _ = configs(tmp_path)
+    robot = RobopartyTwoMotorAmazingHand(robot_config)
+    robot._can_bus = FakeCanBus()
+    robot._last_arm_positions = np.zeros(2)
+    robot._hand_feedback_healthy = True
+    robot.hand = FakeHand()
+    targets = []
+    monkeypatch.setattr(
+        "lerobot_robot_roboparty.two_motor_amazing_hand_robot._send_targets",
+        lambda bus, motors, values, **kwargs: targets.append(values.copy()),
+    )
+    monkeypatch.setattr(
+        "lerobot_robot_roboparty.two_motor_amazing_hand_robot._send_simple_command",
+        lambda *args: None,
+    )
+
+    robot._hand_io_lock.acquire()
+    try:
+        robot.send_action(
+            {
+                f"{TWO_MOTOR_JOINTS[0]}.pos": 10.0,
+                f"{TWO_MOTOR_JOINTS[1]}.pos": -10.0,
+                "right_hand_grasp.pos": 50.0,
+                ARM_TORQUE_CONTROL_KEY: 1.0,
+            }
+        )
+    finally:
+        robot._hand_io_lock.release()
+
+    assert len(targets) == 1
+    assert robot.hand.commands == []
+
+
+def test_transient_hand_feedback_fault_holds_last_value_and_recovers(
+    tmp_path, monkeypatch
+) -> None:
+    robot_config, _ = configs(tmp_path)
+    robot = RobopartyTwoMotorAmazingHand(robot_config)
+    robot._can_bus = FakeCanBus()
+    robot._last_arm_positions = np.zeros(2)
+    hand = FakeHand()
+    feedback = iter(
+        [
+            {servo_id: 0.0 for servo_id in range(1, 9)},
+            RuntimeError("Operation timed out"),
+            {servo_id: 0.0 for servo_id in range(1, 9)},
+        ]
+    )
+
+    def read_positions():
+        value = next(feedback)
+        if isinstance(value, Exception):
+            raise value
+        return value
+
+    hand.read_positions = read_positions
+    robot.hand = hand
+    monkeypatch.setattr(
+        "lerobot_robot_roboparty.two_motor_amazing_hand_robot._read_positions",
+        lambda bus, motors, timeout: np.zeros(2),
+    )
+    targets = []
+    monkeypatch.setattr(
+        "lerobot_robot_roboparty.two_motor_amazing_hand_robot._send_targets",
+        lambda bus, motors, values, **kwargs: targets.append(values.copy()),
+    )
+    monkeypatch.setattr(
+        "lerobot_robot_roboparty.two_motor_amazing_hand_robot._send_simple_command",
+        lambda *args: None,
+    )
+
+    first = robot.get_observation()
+    stale = robot.get_observation()
+    action = {
+        f"{TWO_MOTOR_JOINTS[0]}.pos": 1.0,
+        f"{TWO_MOTOR_JOINTS[1]}.pos": 0.0,
+        "right_hand_grasp.pos": 50.0,
+        ARM_TORQUE_CONTROL_KEY: 1.0,
+    }
+    robot.send_action(action)
+
+    assert stale["right_hand_grasp.pos"] == first["right_hand_grasp.pos"]
+    assert len(targets) == 1
+    assert hand.commands == []
+
+    robot.get_observation()
+    robot.send_action(action)
+    assert len(targets) == 2
+    assert len(hand.commands) == 1

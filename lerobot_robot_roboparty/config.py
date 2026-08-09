@@ -82,6 +82,7 @@ class RobopartyTwoMotorAmazingHandConfig(RobotConfig):
     can_bitrate: int | None = None
     hand_baudrate: int = 1_000_000
     hand_timeout_s: float = 0.5
+    hand_feedback_hz: float = 10.0
     hand_open_deg: float = 0.0
     hand_closed_deg: float = 110.0
     hand_speed: int = 3
@@ -114,7 +115,7 @@ class RobopartyTwoMotorAmazingHandConfig(RobotConfig):
             raise ValueError("can_bitrate must be positive when provided")
         if self.hand_baudrate <= 0:
             raise ValueError("hand_baudrate must be positive")
-        if self.hand_timeout_s <= 0 or self.can_timeout_s <= 0:
+        if self.hand_timeout_s <= 0 or self.can_timeout_s <= 0 or self.hand_feedback_hz <= 0:
             raise ValueError("hardware timeouts must be positive")
         if self.hand_open_deg == self.hand_closed_deg:
             raise ValueError("hand_open_deg and hand_closed_deg must be different")
