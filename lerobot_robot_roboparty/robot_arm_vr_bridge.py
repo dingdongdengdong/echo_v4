@@ -18,6 +18,7 @@ from .can_probe import (
     DM4340P_VELOCITY_LIMIT_RAD_S,
     read_dm4340p_state,
 )
+from .j3_gain_profile import load_j3_gain_profile
 from .two_motor_calibration import calibrated_position_rad, load_calibration
 from .two_motor_quest_teleop import (
     CAN_CMD_DISABLE,
@@ -31,8 +32,9 @@ from .two_motor_quest_teleop import (
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 ROBOT_ARM_VR_ROOT = REPO_ROOT / "third_party" / "robot_arm_vr"
-DEFAULT_CONFIG = ROBOT_ARM_VR_ROOT / "config" / "superarm_j1_j2_jetson.json"
-DEFAULT_CALIBRATION = REPO_ROOT / "config" / "right_arm_two_motor.json"
+DEFAULT_CONFIG = ROBOT_ARM_VR_ROOT / "config" / "robot_arm_temp_j1_j2_updated.json"
+DEFAULT_CALIBRATION = REPO_ROOT / ".local" / "calibration" / "right_arm_three_motor.json"
+DEFAULT_J3_GAIN_PROFILE = REPO_ROOT / ".local" / "calibration" / "right_arm_j3_mit_gain.json"
 DEFAULT_RATE_HZ = 20.0
 DEFAULT_MOTOR_RATE_HZ = 50.0
 DEFAULT_VELOCITY_SCALE = 0.16  # ≈ 0.03 rad/frame × 20 Hz ÷ 3.77 rad/s
@@ -41,14 +43,15 @@ DEFAULT_VELOCITY_SCALE = 0.16  # ≈ 0.03 rad/frame × 20 Hz ÷ 3.77 rad/s
 # axes produced either J2 droop or an unnecessarily stiff J1.
 DEFAULT_KP = (120.0, 180.0)
 DEFAULT_KD = (2.5, 4.0)
+DEFAULT_MOTOR_SIGNS = (-1.0, 1.0, -1.0)
 DEFAULT_CAN_PORT = (
     "/dev/serial/by-id/"
     "usb-Openlight_Labs_CANable2_b158aa7_github.com_normaldotcom_canable2.git_"
-    "2070388B3136-if00"
+    "2095336A5845-if00"
 )
 DEFAULT_HAND_PORT = (
     "/dev/serial/by-id/"
-    "usb-1a86_USB_Single_Serial_5C63050237-if00"
+    "usb-1a86_USB_Single_Serial_5A7A055962-if00"
 )
 DEFAULT_HAND_BAUDRATE = 1_000_000
 DEFAULT_HAND_TIMEOUT_S = 0.5
@@ -171,7 +174,7 @@ def session_joint_to_raw(q: np.ndarray, origin: np.ndarray, signs: np.ndarray) -
 
 def raw_to_calibrated_joint(
     raw: np.ndarray,
-    motors: tuple[dict, dict],
+    motors: tuple[dict, ...],
     signs: np.ndarray,
 ) -> np.ndarray:
     """Convert raw motor radians to calibrated URDF joint radians."""
@@ -184,7 +187,7 @@ def raw_to_calibrated_joint(
 
 def calibrated_joint_to_raw(
     q: np.ndarray,
-    motors: tuple[dict, dict],
+    motors: tuple[dict, ...],
     signs: np.ndarray,
 ) -> np.ndarray:
     """Convert calibrated URDF joint radians to raw motor radians."""
@@ -196,7 +199,7 @@ def calibrated_joint_to_raw(
 
 
 def calibrated_joint_limits(
-    motors: tuple[dict, dict],
+    motors: tuple[dict, ...],
     signs: np.ndarray,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Return calibration capture limits expressed in URDF joint coordinates."""
@@ -212,39 +215,46 @@ def calibrated_joint_limits(
     return np.asarray(lower), np.asarray(upper)
 
 
-def select_calibration_motors(calibration: dict, motor_ids: tuple[int, int]) -> tuple[dict, dict]:
-    """Select J1/J2 calibration records in command-ID order."""
+def select_calibration_motors(calibration: dict, motor_ids: tuple[int, ...]) -> tuple[dict, ...]:
+    """Select calibration records in command-ID order."""
     by_id = {int(motor["command_id"]): motor for motor in calibration["motors"]}
     missing = [motor_id for motor_id in motor_ids if motor_id not in by_id]
     if missing:
         raise ValueError(f"calibration is missing motor command IDs: {missing}")
-    return tuple(by_id[motor_id] for motor_id in motor_ids)  # type: ignore[return-value]
+    return tuple(by_id[motor_id] for motor_id in motor_ids)
 
 
 class RawRelativeDMBackend:
-    """Two DM4340 motors using saved calibration or a volatile session zero.
+    """DM4340 motors using saved calibration or a volatile session zero.
 
     When ``calibration`` is supplied, state and commands use calibrated LeRobot
-    joint radians. Otherwise the current raw J1/J2 positions become joint [0, 0].
+    joint radians. Otherwise the current raw positions become joint zero.
     """
 
     def __init__(
         self,
         can_port: str,
         *,
-        motor_ids: tuple[int, int] = (1, 2),
-        feedback_ids: tuple[int, int] = (0x11, 0x12),
-        signs: tuple[float, float] = (1.0, 1.0),
+        motor_ids: tuple[int, ...] = (1, 2),
+        feedback_ids: tuple[int, ...] = (0x11, 0x12),
+        signs: tuple[float, ...] = (1.0, 1.0),
         bitrate: int = 1_000_000,
         timeout_s: float = 0.05,
-        kp: tuple[float, float] = DEFAULT_KP,
-        kd: tuple[float, float] = DEFAULT_KD,
-        max_velocity_rad_s: tuple[float, float] = (3.77, 3.77),
+        kp: tuple[float, ...] = DEFAULT_KP,
+        kd: tuple[float, ...] = DEFAULT_KD,
+        max_velocity_rad_s: tuple[float, ...] = (3.77, 3.77),
         calibration: dict | None = None,
         bus_factory: Callable[..., Any] | None = None,
     ) -> None:
-        if len(set(motor_ids)) != 2 or len(set(feedback_ids)) != 2:
-            raise ValueError("J1/J2 motor and feedback IDs must be unique")
+        count = len(motor_ids)
+        if count == 0:
+            raise ValueError("at least one motor is required")
+        if len(feedback_ids) != count or len(signs) != count:
+            raise ValueError("motor IDs, feedback IDs, and signs must have equal length")
+        if len(kp) != count or len(kd) != count or len(max_velocity_rad_s) != count:
+            raise ValueError("gains and velocity limits must match the motor count")
+        if len(set(motor_ids)) != count or len(set(feedback_ids)) != count:
+            raise ValueError("motor and feedback IDs must be unique")
         if any(sign not in (-1.0, 1.0) for sign in signs):
             raise ValueError("motor signs must be +1 or -1")
         if timeout_s <= 0 or bitrate <= 0:
@@ -273,7 +283,7 @@ class RawRelativeDMBackend:
 
     @property
     def n_joints(self) -> int:
-        return 2
+        return len(self.motor_ids)
 
     @property
     def raw_origin(self) -> np.ndarray | None:
@@ -330,18 +340,18 @@ class RawRelativeDMBackend:
         return self._raw_to_joint(raw)
 
     def read_velocities(self) -> np.ndarray:
-        if len(self._last_states) != 2:
+        if len(self._last_states) != self.n_joints:
             self.read_positions()
         raw = np.asarray([float(state["velocity_rad_s"]) for state in self._last_states])
         return self.signs * raw
 
     def read_temperatures(self) -> np.ndarray:
-        if len(self._last_states) != 2:
+        if len(self._last_states) != self.n_joints:
             self.read_positions()
         return np.asarray([float(state["mos_temperature_c"]) for state in self._last_states])
 
     def read_errors(self) -> list[int]:
-        if len(self._last_states) != 2:
+        if len(self._last_states) != self.n_joints:
             self.read_positions()
         return [0 if state["status"] in ("disabled", "enabled") else int(state["status_code"])
                 for state in self._last_states]
@@ -353,8 +363,8 @@ class RawRelativeDMBackend:
             if self._raw_origin is None:
                 raise RuntimeError("raw session origin is not initialized")
             q = np.asarray(q, dtype=float)
-            if q.shape != (2,) or not np.isfinite(q).all():
-                raise ValueError("expected two finite J1/J2 targets")
+            if q.shape != (self.n_joints,) or not np.isfinite(q).all():
+                raise ValueError(f"expected {self.n_joints} finite joint targets")
 
             now = time.monotonic()
             previous = q if self._last_q_cmd is None else self._last_q_cmd
@@ -438,10 +448,11 @@ def _load_robot_arm_vr():
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="robot_arm_vr UDP bridge to calibrated J1/J2 DM4340 motors"
+        description="robot_arm_vr UDP bridge to calibrated J1/J2/J3 DM4340 motors"
     )
     parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
     parser.add_argument("--calibration", type=Path, default=DEFAULT_CALIBRATION)
+    parser.add_argument("--j3-gain-profile", type=Path, default=DEFAULT_J3_GAIN_PROFILE)
     parser.add_argument("--can-port", default=DEFAULT_CAN_PORT)
     parser.add_argument("--hand-port", default=DEFAULT_HAND_PORT)
     parser.add_argument("--hand-baudrate", type=int, default=DEFAULT_HAND_BAUDRATE)
@@ -454,8 +465,15 @@ def main() -> int:
     parser.add_argument("--velocity-scale", type=float, default=DEFAULT_VELOCITY_SCALE)
     parser.add_argument("--rate", type=float, default=DEFAULT_RATE_HZ)
     parser.add_argument("--motor-rate", type=float, default=DEFAULT_MOTOR_RATE_HZ)
-    parser.add_argument("--motor1-sign", type=float, choices=(-1.0, 1.0), default=1.0)
-    parser.add_argument("--motor2-sign", type=float, choices=(-1.0, 1.0), default=1.0)
+    parser.add_argument(
+        "--motor1-sign", type=float, choices=(-1.0, 1.0), default=DEFAULT_MOTOR_SIGNS[0]
+    )
+    parser.add_argument(
+        "--motor2-sign", type=float, choices=(-1.0, 1.0), default=DEFAULT_MOTOR_SIGNS[1]
+    )
+    parser.add_argument(
+        "--motor3-sign", type=float, choices=(-1.0, 1.0), default=DEFAULT_MOTOR_SIGNS[2]
+    )
     parser.add_argument("--kp", type=float, nargs=2, default=DEFAULT_KP)
     parser.add_argument("--kd", type=float, nargs=2, default=DEFAULT_KD)
     args = parser.parse_args()
@@ -465,25 +483,42 @@ def main() -> int:
         parser.error("hand baudrate/timeout must be positive and hand speed must be 1..6")
     ArmConfig, FakeJetson, ports = _load_robot_arm_vr()
     cfg = ArmConfig.load(args.config)
-    if cfg.dof < 2:
-        parser.error("robot_arm_vr config must contain at least J1/J2")
+    if cfg.dof not in (2, 3):
+        parser.error("robot_arm_vr config must contain J1/J2 or J1/J2/J3")
     pf = ports(args.profile)
     calibration = load_calibration(args.calibration)
-    calibration_motors = select_calibration_motors(calibration, (1, 2))
-    signs = np.asarray((args.motor1_sign, args.motor2_sign), dtype=float)
+    motor_ids = tuple(range(1, cfg.dof + 1))
+    feedback_ids = tuple(motor_id + 0x10 for motor_id in motor_ids)
+    calibration_motors = select_calibration_motors(calibration, motor_ids)
+    signs = np.asarray(
+        (args.motor1_sign, args.motor2_sign, args.motor3_sign)[: cfg.dof], dtype=float
+    )
+    kp = list(args.kp)
+    kd = list(args.kd)
+    if cfg.dof == 3:
+        j3_motor = calibration_motors[2]
+        j3_kp, j3_kd = load_j3_gain_profile(
+            args.j3_gain_profile,
+            command_id=int(j3_motor["command_id"]),
+            feedback_id=int(j3_motor["feedback_id"]),
+        )
+        kp.append(j3_kp)
+        kd.append(j3_kd)
     calibration_lower, calibration_upper = calibrated_joint_limits(calibration_motors, signs)
     effective_lower = np.asarray(cfg.lower, dtype=float).copy()
     effective_upper = np.asarray(cfg.upper, dtype=float).copy()
-    effective_lower[:2] = np.maximum(effective_lower[:2], calibration_lower)
-    effective_upper[:2] = np.minimum(effective_upper[:2], calibration_upper)
-    if np.any(effective_lower[:2] >= effective_upper[:2]):
-        parser.error("calibration range does not overlap the J1/J2 URDF limits")
+    effective_lower[: cfg.dof] = np.maximum(effective_lower[: cfg.dof], calibration_lower)
+    effective_upper[: cfg.dof] = np.minimum(effective_upper[: cfg.dof], calibration_upper)
+    if np.any(effective_lower[: cfg.dof] >= effective_upper[: cfg.dof]):
+        parser.error("calibration range does not overlap the URDF limits")
     backend = RawRelativeDMBackend(
         args.can_port,
+        motor_ids=motor_ids,
+        feedback_ids=feedback_ids,
         signs=tuple(signs),
-        kp=tuple(args.kp),
-        kd=tuple(args.kd),
-        max_velocity_rad_s=tuple(np.asarray(cfg.velocity[:2], dtype=float)),
+        kp=tuple(kp),
+        kd=tuple(kd),
+        max_velocity_rad_s=tuple(np.asarray(cfg.velocity[: cfg.dof], dtype=float)),
         calibration=calibration,
     )
     jet = FakeJetson(
@@ -491,7 +526,7 @@ def main() -> int:
         upper=effective_upper,
         max_velocity=cfg.velocity,
         n_joints=cfg.dof,
-        n_motors=2,
+        n_motors=cfg.dof,
         dt=cfg.control_dt,
         rate_hz=args.rate,
         motor_hz=args.motor_rate,
@@ -517,22 +552,22 @@ def main() -> int:
         jet.start()
         start_q = backend.start_q
         if start_q is None:
-            raise RuntimeError("J1/J2 start position was not captured")
+            raise RuntimeError("joint start position was not captured")
         print("=" * 74)
-        print("robot_arm_vr -> calibrated J1/J2 Jetson bridge")
+        print(f"robot_arm_vr -> calibrated {'/'.join(cfg.joint_names)} Jetson bridge")
         print(f"calibration: {args.calibration.resolve()}")
-        print(f"calibrated start J1/J2: {np.round(start_q, 4).tolist()} rad")
+        print(f"calibrated start joints: {np.round(start_q, 4).tolist()} rad")
         print(
-            "effective limits J1/J2: "
-            f"{np.round(effective_lower[:2], 4).tolist()} .. "
-            f"{np.round(effective_upper[:2], 4).tolist()} rad"
+            "effective joint limits: "
+            f"{np.round(effective_lower[: cfg.dof], 4).tolist()} .. "
+            f"{np.round(effective_upper[: cfg.dof], 4).tolist()} rad"
         )
         print(f"motor signs: {backend.signs.tolist()}")
         print(f"motor profile (hardware-tuned): kp={backend.kp.tolist()} kd={backend.kd.tolist()}")
         print(f"UDP command/state/beacon: {pf.cmd}/{pf.state}/{pf.beacon}")
         print(
             f"velocity scale: {args.velocity_scale:.2f}; motor interpolation: "
-            f"{args.motor_rate:.0f} Hz; only motor IDs 1 and 2 are used"
+            f"{args.motor_rate:.0f} Hz; motor IDs {list(motor_ids)} are used"
         )
         if hand is None:
             print("AmazingHand: disabled (--no-hand)")
@@ -541,7 +576,7 @@ def main() -> int:
                 f"AmazingHand: {args.hand_port} @ {args.hand_baudrate}; "
                 f"Trigger controls IDs 1..8 independently of arm HOLD/RUN"
             )
-        print("Waiting for robot_arm_vr Mac teleop; Ctrl+C stops and disables J1/J2")
+        print("Waiting for robot_arm_vr teleop; Ctrl+C stops and disables all arm joints")
         print("=" * 74, flush=True)
         previous_status = None
         last_stats_log_s = 0.0
@@ -578,7 +613,7 @@ def main() -> int:
             with suppress(Exception):
                 hand.disconnect()
         backend.disconnect()
-        print("STOPPED J1/J2 and AmazingHand torque=disabled", flush=True)
+        print("STOPPED arm and AmazingHand torque=disabled", flush=True)
 
 
 if __name__ == "__main__":

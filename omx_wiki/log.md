@@ -181,3 +181,30 @@
 ## [2026-08-08T12:37:56.369Z] lint
 - **Pages:** roboparty-xr-ik-custom-urdf-quest2-lerobot-dataflow-ko.md, roboparty-xr-ik-dataset-debugging-ko.md
 - **Summary:** Lint: 2 issues (0 orphan, 0 stale, 0 broken, 0 contradictions)
+## [2026-08-13T13:33:23.800Z] ingest
+- **Pages:** 8012-vr-arm-path-confusion-retrospective-ko.md
+- **Summary:** Created new page "8012 VR arm path confusion retrospective KO"
+
+## [2026-08-13T13:33:23.810Z] add
+- **Pages:** 8012-vr-arm-path-confusion-retrospective-ko.md
+- **Summary:** Created wiki page 8012-vr-arm-path-confusion-retrospective-ko.md
+
+## [2026-08-13T13:33:24.628Z] lint
+- **Pages:** 8012-vr-arm-path-confusion-retrospective-ko.md, roboparty-xr-ik-custom-urdf-quest2-lerobot-dataflow-ko.md, roboparty-xr-ik-dataset-debugging-ko.md
+- **Summary:** Lint: 3 issues (1 orphan, 0 stale, 0 broken, 0 contradictions)
+
+## [2026-08-13T13:37:38.260Z] add
+- **Pages:** 8012-vr-arm-path-confusion-retrospective-ko.md, jetson-bring-up-status-and-deployment-gate.md, jetson-safe-bring-up-runbook.md, lerobot-keyboard-rerun-recording-ko.md, roboparty-xr-ik-custom-urdf-quest2-lerobot-dataflow-ko.md, roboparty-xr-ik-dataset-debugging-ko.md
+- **Summary:** Refreshed wiki index and derived metadata surfaces
+
+## [2026-08-13T13:37:39.047Z] lint
+- **Pages:** 8012-vr-arm-path-confusion-retrospective-ko.md, roboparty-xr-ik-custom-urdf-quest2-lerobot-dataflow-ko.md, roboparty-xr-ik-dataset-debugging-ko.md
+- **Summary:** Lint: 3 issues (1 orphan, 0 stale, 0 broken, 0 contradictions)
+
+## [2026-08-13T13:40:16.109Z] add
+- **Pages:** 8012-vr-arm-path-confusion-retrospective-ko.md, jetson-bring-up-status-and-deployment-gate.md, jetson-safe-bring-up-runbook.md, lerobot-keyboard-rerun-recording-ko.md, roboparty-xr-ik-custom-urdf-quest2-lerobot-dataflow-ko.md, roboparty-xr-ik-dataset-debugging-ko.md
+- **Summary:** Refreshed wiki index and derived metadata surfaces
+
+## [2026-08-13T13:40:16.925Z] lint
+- **Pages:** roboparty-xr-ik-custom-urdf-quest2-lerobot-dataflow-ko.md, roboparty-xr-ik-dataset-debugging-ko.md
+- **Summary:** Lint: 2 issues (0 orphan, 0 stale, 0 broken, 0 contradictions)

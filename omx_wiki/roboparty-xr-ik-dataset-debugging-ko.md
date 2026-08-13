@@ -4,7 +4,7 @@ tags: ["roboparty", "quest2", "ik", "urdf", "lerobot", "dataset", "korean", "deb
 created: 2026-08-08T08:10:51.973Z
 updated: 2026-08-08T20:05:00+09:00
 sources: ["handoff_orientation.tar.gz", "https://github.com/huggingface/lerobot/blob/v0.6.1/src/lerobot/utils/keyboard_input.py"]
-links: ["roboparty-xr-ik-custom-urdf-quest2-lerobot-dataflow-ko.md", "jetson-safe-bring-up-runbook.md", "jetson-bring-up-status-and-deployment-gate.md", "lerobot-keyboard-rerun-recording-ko.md"]
+links: ["roboparty-xr-ik-custom-urdf-quest2-lerobot-dataflow-ko.md", "jetson-safe-bring-up-runbook.md", "jetson-bring-up-status-and-deployment-gate.md", "lerobot-keyboard-rerun-recording-ko.md", "8012-vr-arm-path-confusion-retrospective-ko.md"]
 category: architecture
 confidence: high
 schemaVersion: 1
@@ -13,6 +13,7 @@ schemaVersion: 1
 # RoboParty J1·J2 XR–IK–Dataset 디버깅 순서
 
 > 전체 구조는 [[roboparty-xr-ik-custom-urdf-quest2-lerobot-dataflow-ko]]를 먼저 읽는다. 이 문서는 증상에서 원인을 좁히는 순서다.
+> 8012 실행 경로와 최신 URDF를 잘못 선택했던 원인 및 재발 방지는 [[8012-vr-arm-path-confusion-retrospective-ko]]에 기록했다.
 
 ## 1. 기준 구성을 먼저 확인한다
 

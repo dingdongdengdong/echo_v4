@@ -1,21 +1,62 @@
 # Roboparty Quest 2 → LeRobot 오른팔 텔레오퍼레이션
 
-이 저장소는 handoff의 현재 실물용 3축 임시 팔 URDF를 기준으로 J1·J2와 AmazingHand를 Meta Quest 2로 조작하고, 그 결과를 Hugging Face LeRobot 데이터셋/ACT 학습 형식으로 기록하기 위한 통합을 포함합니다. J4/J5 쪽 생략된 링크는 IK 체인에 넣지 않습니다.
+이 저장소는 handoff의 현재 실물용 3축 임시 팔 URDF를 기준으로 J1·J2·J3와 AmazingHand를 Meta Quest 2로 조작하고, 그 결과를 Hugging Face LeRobot 데이터셋/ACT 학습 형식으로 기록하기 위한 통합을 포함합니다. J4/J5 쪽 생략된 링크는 IK 체인에 넣지 않습니다.
+
+## 현재 검증된 8012 J1·J2·J3 실행 경로
+
+> **이 실물 구성에서는 `4443`이나 `third_party/robot_arm_vr/run.sh --temp`를 사용하지 않습니다.**
+> 그 경로는 standalone 기본 config를 선택합니다. 현재 기준은 port `8012`,
+> `robot_arm_temp_j1_j2_updated.json`, physical signs `[-1, +1, -1]`입니다.
+
+먼저 장치가 모두 보이는지 확인합니다.
+
+```bash
+ls -l /dev/serial/by-id/
+.venv/bin/roboparty-can-probe \
+  --port /dev/serial/by-id/usb-Openlight_Labs_CANable2_b158aa7_github.com_normaldotcom_canable2.git_2095336A5845-if00 \
+  --motor-ids 1,2,3 --timeout 0.2
+```
+
+두 터미널에서 아래 순서로 실행합니다.
+
+```bash
+# 터미널 1: 실물 J1/J2/J3 + AmazingHand bridge
+cd /home/dong/echo_v4
+.venv/bin/roboparty-robot-arm-vr-bridge
+```
+
+```bash
+# 터미널 2: 최신 3-DOF URDF를 쓰는 Quest/WebXR 서버
+cd /home/dong/echo_v4/third_party/robot_arm_vr
+.venv/bin/python -u scripts/05_teleop_sim.py \
+  --config config/robot_arm_temp_j1_j2_updated.json \
+  --profile jetson --port 8012 --ip 10.175.216.203 \
+  --motors jetson --jetson-host 127.0.0.1 \
+  --no-home-on-xr-start --disable-home-button
+```
+
+- Quest: `https://10.175.216.203:8012` → **Start XR**
+- Dashboard: `https://10.175.216.203:8012/dashboard`
+- 시작 후 현재 실물 자세로 동기화하지만 오른손 **Grip** 전에는 `HOLD`입니다.
+- J3 wrist roll은 오른손 thumbstick X입니다.
+- J3가 반대로 보일 때 WebXR mirror를 켜는 것이 아니라 bridge의 physical sign을 확인합니다.
+- 종료는 **텔레옵(터미널 2) 먼저**, bridge(터미널 1) 다음으로 `Ctrl+C`를 누르고, passive probe에서
+  J1/J2/J3가 모두 `state=disabled`인지 확인합니다.
 
 ## 실행 구조
 
 ```text
-# 현재 2축 + AmazingHand 구성
+# 현재 3축 + AmazingHand 구성
 Meta Quest 2 ──HTTPS/WebXR──> Jetson (Vuer + LeRobot + 카메라)
-                                  ├── USB/CAN ──> DM4340 2축
+                                  ├── USB/CAN ──> DM4340 3축
                                   └── USB serial ──> AmazingHand 8서보
 
 # 향후 5축 구성
 Meta Quest 2 ──HTTPS/WebXR──> Jetson/Mac ──Tailscale──> Ubuntu 22.04 ROS 2 bridge
 ```
 
-- **Jetson**: 현재 2축 팔, AmazingHand, 두 RGB 카메라, Quest WebXR와 LeRobot 기록을 모두 실행합니다.
-- **Mac**: 더 이상 현재 2축 구성의 필수 장치가 아니며 개발/점검용으로만 사용할 수 있습니다.
+- **Jetson**: 현재 3축 팔, AmazingHand, 두 RGB 카메라, Quest WebXR와 LeRobot 기록을 모두 실행합니다.
+- **Mac**: 더 이상 현재 3축 구성의 필수 장치가 아니며 개발/점검용으로만 사용할 수 있습니다.
 - **Ubuntu 22.04 서버**: 향후 5축 ROS 2 팔을 사용할 때의 선택 구성입니다.
 - LeRobot 0.6은 Python 3.12+, ROS 2 Humble은 기본 Python 3.10이므로 두 프로세스를 분리합니다.
 - 서버 포트는 공인 인터넷에 노출하지 않고 `tailscale0`에서만 허용합니다.

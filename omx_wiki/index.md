@@ -1,6 +1,6 @@
 # Wiki Index
 
-> 5 pages | Last updated: 2026-08-08T09:28:30.971Z
+> 6 pages | Last updated: 2026-08-13T13:40:16.106Z
 
 ## architecture
 
@@ -11,6 +11,10 @@
 
 - [Jetson safe bring-up runbook](jetson-safe-bring-up-runbook.md) — # Jetson safe bring-up runbook
 - [LeRobot keyboard and Rerun recording KO](lerobot-keyboard-rerun-recording-ko.md) — # LeRobot 키보드 + Rerun으로 RoboParty dataset 기록
+
+## debugging
+
+- [8012 VR arm 경로 혼동 회고와 재발 방지](8012-vr-arm-path-confusion-retrospective-ko.md) — # 8012 VR arm 경로 혼동 회고와 재발 방지
 
 ## environment
 

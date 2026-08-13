@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 from types import SimpleNamespace
+from xml.etree import ElementTree
 
 import numpy as np
 import pytest
@@ -12,10 +14,12 @@ from lerobot_robot_roboparty.can_probe import (
     DM4340P_VELOCITY_LIMIT_RAD_S,
     uint_to_float,
 )
+from lerobot_robot_roboparty.j3_gain_profile import load_j3_gain_profile
 from lerobot_robot_roboparty.robot_arm_vr_bridge import (
     DEFAULT_KD,
     DEFAULT_KP,
     DEFAULT_MOTOR_RATE_HZ,
+    DEFAULT_MOTOR_SIGNS,
     DEFAULT_RATE_HZ,
     DEFAULT_VELOCITY_SCALE,
     AmazingHandCommandSink,
@@ -54,6 +58,7 @@ CALIBRATION = {
 def test_bridge_defaults_match_hardware_tuned_short_arm_profile() -> None:
     assert DEFAULT_KP == (120.0, 180.0)
     assert DEFAULT_KD == (2.5, 4.0)
+    assert DEFAULT_MOTOR_SIGNS == (-1.0, 1.0, -1.0)
     assert DEFAULT_RATE_HZ == 20.0
     assert DEFAULT_MOTOR_RATE_HZ == 50.0
     assert pytest.approx(0.16) == DEFAULT_VELOCITY_SCALE
@@ -100,6 +105,78 @@ def test_calibrated_limits_follow_axis_signs() -> None:
 def test_calibration_requires_both_j1_j2_records() -> None:
     with pytest.raises(ValueError, match="missing motor command IDs"):
         select_calibration_motors({"motors": CALIBRATION["motors"][:1]}, (1, 2))
+
+
+def test_three_motor_backend_uses_all_joints() -> None:
+    backend = RawRelativeDMBackend(
+        "unused",
+        motor_ids=(1, 2, 3),
+        feedback_ids=(0x11, 0x12, 0x13),
+        signs=(-1.0, 1.0, 1.0),
+        kp=(120.0, 180.0, 50.0),
+        kd=(2.5, 4.0, 1.0),
+        max_velocity_rad_s=(3.77, 3.77, 3.77),
+    )
+
+    assert backend.n_joints == 3
+    np.testing.assert_allclose(backend.signs, [-1.0, 1.0, 1.0])
+    np.testing.assert_allclose(backend.kp, [120.0, 180.0, 50.0])
+    np.testing.assert_allclose(backend.kd, [2.5, 4.0, 1.0])
+
+
+def test_backend_rejects_incomplete_three_motor_parameters() -> None:
+    with pytest.raises(ValueError, match="equal length"):
+        RawRelativeDMBackend(
+            "unused",
+            motor_ids=(1, 2, 3),
+            feedback_ids=(0x11, 0x12),
+            signs=(-1.0, 1.0, 1.0),
+        )
+
+
+def write_j3_profile(path, *, feedback_id: int = 19) -> None:
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "profile_type": "dm4340p_mit_gain",
+                "motor_name": "motor_2",
+                "command_id": 3,
+                "feedback_id": feedback_id,
+                "kp": 50.0,
+                "kd": 1.0,
+            }
+        )
+    )
+
+
+def test_saved_j3_gain_profile_matches_motor_3_calibration(tmp_path) -> None:
+    profile = tmp_path / "j3.json"
+    write_j3_profile(profile)
+
+    assert load_j3_gain_profile(profile, command_id=3, feedback_id=19) == (50.0, 1.0)
+
+
+def test_j3_gain_profile_rejects_wrong_feedback_id(tmp_path) -> None:
+    profile = tmp_path / "j3.json"
+    write_j3_profile(profile)
+
+    with pytest.raises(ValueError, match="feedback_id does not match"):
+        load_j3_gain_profile(profile, command_id=3, feedback_id=0x14)
+
+
+def test_updated_vr_model_enables_j3_without_changing_its_zero_pose() -> None:
+    config_path = bridge_module.DEFAULT_CONFIG
+    config = json.loads(config_path.read_text())
+    root = ElementTree.parse(config["urdf_path"]).getroot()
+    joint3 = root.find("./joint[@name='joint3']")
+
+    assert config["joint_names"] == ["joint1", "joint2", "joint3"]
+    assert config["home_q"][-1] == 0.0
+    assert joint3 is not None
+    assert joint3.attrib["type"] == "revolute"
+    assert joint3.find("origin").attrib["rpy"] == "0 0 0.042587675661"
+    assert joint3.find("axis").attrib["xyz"] == "0 0 -1"
 
 
 def test_start_q_property_returns_a_copy_without_can_read() -> None:
