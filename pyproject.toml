@@ -48,6 +48,7 @@ roboparty-calibrate-two-motors = "lerobot_robot_roboparty.two_motor_calibration:
 roboparty-quest-two-motor-check = "lerobot_robot_roboparty.two_motor_quest_check:main"
 roboparty-quest-two-motor-teleop = "lerobot_robot_roboparty.two_motor_quest_teleop:main"
 roboparty-robot-arm-vr-bridge = "lerobot_robot_roboparty.robot_arm_vr_bridge:main"
+roboparty-record-8012 = "lerobot_robot_roboparty.robot_arm_vr_recorder:main"
 
 [tool.setuptools.packages.find]
 where = ["."]

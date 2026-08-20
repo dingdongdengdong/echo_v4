@@ -1,0 +1,8 @@
+# Stable serial aliases for the current Roboparty Jetson hardware.
+#
+# CANable2 normaldotcom SLCAN adapter, serial 2095336A5845.
+SUBSYSTEM=="tty", ATTRS{idVendor}=="16d0", ATTRS{idProduct}=="117e", ATTRS{serial}=="2095336A5845", SYMLINK+="roboparty-can", GROUP="dialout", MODE="0660", ENV{ID_MM_DEVICE_IGNORE}="1"
+
+# AmazingHand USB serial adapter configured by robot_arm_vr_bridge.py.
+# The alias appears only after the 1a86 adapter enumerates on USB.
+SUBSYSTEM=="tty", ATTRS{idVendor}=="1a86", ATTRS{serial}=="5A7A055962", SYMLINK+="roboparty-hand", GROUP="dialout", MODE="0660", ENV{ID_MM_DEVICE_IGNORE}="1"

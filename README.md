@@ -2,46 +2,145 @@
 
 이 저장소는 handoff의 현재 실물용 3축 임시 팔 URDF를 기준으로 J1·J2·J3와 AmazingHand를 Meta Quest 2로 조작하고, 그 결과를 Hugging Face LeRobot 데이터셋/ACT 학습 형식으로 기록하기 위한 통합을 포함합니다. J4/J5 쪽 생략된 링크는 IK 체인에 넣지 않습니다.
 
-## 현재 검증된 8012 J1·J2·J3 실행 경로
+## HOWTORUN — 8012 J1·J2·J3 dataset 수집
+
+> 각 프로세스와 옵션의 기능, 필요한 이유, 안전 상태, dataset schema는
+> [HOWTORUN 상세 설명](docs/howtorun_dataset_collection.md)에 정리되어 있습니다.
 
 > **이 실물 구성에서는 `4443`이나 `third_party/robot_arm_vr/run.sh --temp`를 사용하지 않습니다.**
 > 그 경로는 standalone 기본 config를 선택합니다. 현재 기준은 port `8012`,
 > `robot_arm_temp_j1_j2_updated.json`, physical signs `[-1, +1, -1]`입니다.
 
-먼저 장치가 모두 보이는지 확인합니다.
+먼저 udev alias와 카메라가 모두 보이는지 확인합니다. USB를 다시 꽂아 `ttyACM*` 번호가 바뀌어도
+실행 명령에는 항상 `/dev/roboparty-can`, `/dev/roboparty-hand`를 사용합니다.
 
 ```bash
-ls -l /dev/serial/by-id/
+cd /home/dong/echo_v4
+ls -l /dev/roboparty-can /dev/roboparty-hand
+ls -l /dev/v4l/by-id/usb-Generic_USB2.0_PC_CAMERA-video-index0
+ls -l /dev/v4l/by-path/platform-3610000.usb-usb-0:1.4:1.3-video-index0
+
 .venv/bin/roboparty-can-probe \
-  --port /dev/serial/by-id/usb-Openlight_Labs_CANable2_b158aa7_github.com_normaldotcom_canable2.git_2095336A5845-if00 \
+  --port /dev/roboparty-can \
   --motor-ids 1,2,3 --timeout 0.2
 ```
 
-두 터미널에서 아래 순서로 실행합니다.
+아래 **Terminal 1 → 2 → 3 → 4** 순서를 사용합니다.
 
 ```bash
-# 터미널 1: 실물 J1/J2/J3 + AmazingHand bridge
+# Terminal 1 (Jetson): 실물 J1/J2/J3 + AmazingHand bridge
 cd /home/dong/echo_v4
-.venv/bin/roboparty-robot-arm-vr-bridge
+.venv/bin/roboparty-robot-arm-vr-bridge \
+  --can-port /dev/roboparty-can \
+  --hand-port /dev/roboparty-hand \
+  --velocity-scale 0.25
+```
+
+bridge 시작 후 다른 Jetson 터미널에서 아래 명령을 실행했을 때 `roboparty-robot`이 손 포트를
+점유해야 합니다. 손 USB를 실행 중에 다시 꽂았다면 bridge를 다시 시작해야 합니다.
+
+```bash
+fuser -v /dev/roboparty-hand
 ```
 
 ```bash
-# 터미널 2: 최신 3-DOF URDF를 쓰는 Quest/WebXR 서버
+# Terminal 2 (Jetson): 최신 3-DOF URDF를 쓰는 Quest/WebXR 서버
 cd /home/dong/echo_v4/third_party/robot_arm_vr
+JETSON_IP="$(ip -4 -o addr show dev wlP1p1s0 | awk '{print $4}' | cut -d/ -f1 | head -1)"
+echo "Quest URL: https://${JETSON_IP}:8012"
+
 .venv/bin/python -u scripts/05_teleop_sim.py \
   --config config/robot_arm_temp_j1_j2_updated.json \
-  --profile jetson --port 8012 --ip 10.175.216.203 \
+  --profile jetson --port 8012 --ip "$JETSON_IP" \
   --motors jetson --jetson-host 127.0.0.1 \
-  --no-home-on-xr-start --disable-home-button
+  --no-home-on-xr-start
 ```
 
-- Quest: `https://10.175.216.203:8012` → **Start XR**
-- Dashboard: `https://10.175.216.203:8012/dashboard`
+- 현재 확인된 Quest 주소: `https://172.24.234.133:8012` → **Start XR**
+- Dashboard: `https://172.24.234.133:8012/dashboard`
+- IP가 바뀌면 Terminal 2가 출력한 `Quest URL`을 사용합니다.
 - 시작 후 현재 실물 자세로 동기화하지만 오른손 **Grip** 전에는 `HOLD`입니다.
-- J3 wrist roll은 오른손 thumbstick X입니다.
+- **Grip**을 누른 채 컨트롤러를 움직이고 돌리면 하나의 IK가 J1/J2/J3를 함께 풀어냅니다.
+- 오른손 **Trigger**는 AmazingHand grasp이며 dataset action에 0–100%로 기록됩니다.
+- 오른손 **A**는 실행 중인 최신 3축 config `robot_arm_temp_j1_j2_updated.json`의 `home_q`로 복귀합니다.
+- 오른손 **B**는 소프트웨어 HOLD/재개 토글입니다. 한 번 누르면 정지하고, 다시 누르면 현재 실물 자세로 다시 맞춘 뒤 Grip 조작을 재개합니다.
 - J3가 반대로 보일 때 WebXR mirror를 켜는 것이 아니라 bridge의 physical sign을 확인합니다.
-- 종료는 **텔레옵(터미널 2) 먼저**, bridge(터미널 1) 다음으로 `Ctrl+C`를 누르고, passive probe에서
-  J1/J2/J3가 모두 `state=disabled`인지 확인합니다.
+
+Mac에서 Rerun을 사용할 때 Terminal 3에서 viewer를 실행합니다.
+
+```bash
+# Terminal 3 (Mac): Rerun viewer
+uv tool install 'rerun-sdk==0.33.1'  # 최초 한 번만
+rerun --bind 127.0.0.1 --port 9876
+```
+
+Terminal 4에서 현재 Jetson IP로 reverse tunnel을 만들고 Jetson에 로그인합니다. 이 SSH 터미널을
+그대로 validation과 dataset recorder 입력용으로 사용합니다.
+
+```bash
+# Terminal 4 (Mac -> Jetson SSH)
+ssh -t -o ExitOnForwardFailure=yes \
+  -R 9876:127.0.0.1:9876 \
+  dong@172.24.234.133
+```
+
+Terminal 4의 SSH 로그인 안에서 먼저 no-motion validation을 실행합니다. 이 명령은 dataset이나
+모터 위치 명령을 만들지 않습니다.
+
+```bash
+cd /home/dong/echo_v4
+
+FRONT_CAMERA=/dev/v4l/by-id/usb-Generic_USB2.0_PC_CAMERA-video-index0 \
+WRIST_CAMERA=/dev/v4l/by-path/platform-3610000.usb-usb-0:1.4:1.3-video-index0 \
+./scripts/record_lerobot_8012_dataset.sh --validate-only
+```
+
+아래 두 줄이 모두 나오기 전에는 Terminal 4에서 기록을 시작하지 않습니다.
+
+```text
+PASS correct 8012 site
+PASS Quest tracking and motor health
+```
+
+같은 Terminal 4에서 20 episodes를 로컬 dataset으로 기록합니다. `MIN_MOTION_RAD=0.02`는
+팔이 한 번도 `ENGAGED`되지 않았거나 실제 `q_act` 관절 이동이 부족한 episode를 자동 폐기합니다.
+`DATASET_ROOT`의 timestamp 때문에 실행할 때마다 새 dataset 디렉터리가 생성됩니다.
+
+```bash
+cd /home/dong/echo_v4
+
+FRONT_CAMERA=/dev/v4l/by-id/usb-Generic_USB2.0_PC_CAMERA-video-index0 \
+WRIST_CAMERA=/dev/v4l/by-path/platform-3610000.usb-usb-0:1.4:1.3-video-index0 \
+DATASET_ROOT="outputs/lerobot_datasets/cube-pick-v1-$(date +%Y%m%d-%H%M%S)" \
+DATASET_REPO_ID="local/roboparty-cube-pick-v1" \
+NUM_EPISODES=20 \
+TASK='Pick up the cube and place it in the tray' \
+FPS=15 \
+MIN_MOTION_RAD=0.02 \
+PUSH_TO_HUB=false \
+DISPLAY_DATA=true \
+./scripts/record_lerobot_8012_dataset.sh
+```
+
+기록 중 SSH 터미널 키는 다음과 같습니다.
+
+| 키 | 동작 |
+|---|---|
+| `n` 또는 `→` | 현재 episode 저장 후 reset/다음 episode로 이동 |
+| `r` 또는 `←` | 현재 episode 폐기 후 다시 기록 |
+| `q` 또는 `ESC` | 조기 종료하고 저장된 dataset finalize |
+
+- `Episode motion: ...` 다음에 `SAVED episode ...`가 나오면 저장 성공입니다.
+- XR tracking이 준비되면 `XR CONNECTED` 메시지가 나오고, 기록 중에는 5초마다 `COLLECTING elapsed=HH:MM:SS frames=... arm=...`이 표시됩니다.
+- `DISCARD episode: ...`가 나오면 Grip을 잡고 더 분명하게 움직인 뒤 해당 episode를 다시 기록합니다.
+- 저장 경로는 위 `DATASET_ROOT`에 지정한 `/home/dong/echo_v4/outputs/lerobot_datasets/...`입니다.
+- 이 dataset은 `q_act` J1/J2/J3 state, `q_cmd` J1/J2/J3와 AmazingHand grasp 명령(0–100%) action,
+  front/wrist RGB를 기록합니다.
+- AmazingHand의 실제 위치 feedback은 observation에 위장해 넣지 않고, Quest Trigger의 grasp 명령만
+  `right_hand_grasp.pos` action으로 기록합니다.
+
+- 종료는 Terminal 4 recorder에서 `q`, Terminal 2 WebXR에서 `Ctrl+C`, Terminal 1 bridge에서
+  `Ctrl+C` 순서입니다. 마지막으로 passive probe에서 J1/J2/J3가 모두 `state=disabled`인지 확인합니다.
 
 ## 실행 구조
 
@@ -385,47 +484,27 @@ rerun --bind 127.0.0.1 --port 9876
 ```
 
 Mac의 두 번째 터미널에서 Rerun 포트를 Jetson으로 reverse-forward하며 SSH에 접속합니다. 현재 Jetson
-LAN 주소가 바뀌었으면 `10.175.216.203`만 실제 주소로 교체합니다.
+LAN 주소가 바뀌었으면 Terminal 2가 출력한 IP로 `172.24.234.133`을 교체합니다.
 
 ```bash
 ssh -t -o ExitOnForwardFailure=yes \
   -R 9876:127.0.0.1:9876 \
-  dong@10.175.216.203
+  dong@172.24.234.133
 ```
 
-그 SSH 터미널 안에서 Hub 업로드 없이 수동 episode를 기록합니다. LeRobot의 숫자 parser와 기존
-record loop가 `inf`를 그대로 처리하므로 별도 timing 구현 없이 키를 누를 때까지 각 phase가 계속됩니다.
-`0`은 기존 LeRobot 의미대로 해당 phase를 생략합니다.
+그 SSH 터미널 안에서 현재 `8012` 서버를 그대로 둔 채 passive recorder를 실행합니다. recorder는
+`https://127.0.0.1:8012/state`에서 실제 J1/J2/J3와 현재 명령을 읽고 Generic USB/D435i RGB 영상을 기록합니다.
+CAN, AmazingHand serial, Quest WebXR를 다시 열지 않으므로 다른 VR 사이트가 뜨지 않습니다.
 
 ```bash
 cd /home/dong/echo_v4
-source .venv/bin/activate
 
-roboparty-record \
-  --robot.type=roboparty_two_motor_amazing_hand \
-  --robot.id=two_motor_amazing_hand \
-  --robot.hand_port=/dev/serial/by-id/usb-1a86_USB_Single_Serial_5C63050237-if00 \
-  --robot.can_port=/dev/serial/by-id/usb-Openlight_Labs_CANable2_b158aa7_github.com_normaldotcom_canable2.git_2070388B3136-if00 \
-  --robot.can_interface=slcan \
-  --robot.two_motor_calibration_path=config/right_arm_two_motor.json \
-  --robot.arm_control_mode=ik \
-  --robot.cameras='{front: {type: opencv, index_or_path: /dev/v4l/by-id/usb-046d_HD_Pro_Webcam_C920-video-index0, width: 640, height: 480, fps: 30}, wrist: {type: opencv, index_or_path: /dev/v4l/by-path/platform-3610000.usb-usb-0:2:1.3-video-index0, width: 640, height: 480, fps: 30}}' \
-  --teleop.type=quest2_vuer \
-  --teleop.id=quest2 \
-  --teleop.cert_file=cert.pem \
-  --teleop.key_file=key.pem \
-  --dataset.repo_id=local/roboparty-two-motor-amazing-hand \
-  --dataset.num_episodes=2 \
-  --dataset.single_task='Grasp the object with the right hand' \
-  --dataset.episode_time_s=inf \
-  --dataset.reset_time_s=inf \
-  --dataset.fps=15 \
-  --dataset.push_to_hub=false \
-  --display_data=true \
-  --display_mode=rerun \
-  --display_ip=127.0.0.1 \
-  --display_port=9876
+NUM_EPISODES=20 \
+TASK='Pick up the cube' \
+./scripts/record_lerobot_8012_dataset.sh
 ```
+
+전체 bridge/WebXR/validation/record 실행 순서는 README 상단의 **HOWTORUN**을 기준으로 합니다.
 
 키 입력은 **Rerun 창이 아니라 Mac의 SSH 터미널에 focus를 둔 상태**에서 합니다.
 
@@ -436,24 +515,34 @@ roboparty-record \
 | `ESC` | 기록 세션을 종료하고 저장된 dataset을 finalize |
 
 SSH 환경에서 방향키 escape sequence가 가로채지는 경우에는 LeRobot에 이미 포함된 동등 키
-`n`(다음), `r`(재기록), `q`(종료)를 사용합니다. Rerun은 카메라·J1/J2 state·최종 action을 보여줄
+`n`(다음), `r`(재기록), `q`(종료)를 사용합니다. Rerun은 두 카메라·J1/J2/J3 state·최종 action을 보여줄
 뿐이고 기록 단계 전환이나 로봇 명령을 직접 처리하지 않습니다.
 
-이 구성의 LeRobot action/state 순서는 다음 3축으로 고정됩니다.
+이 구성의 `observation.state`는 다음 팔 3축이고, 팔 값은 최신 3축 URDF의 radian입니다.
 
 ```text
-right_arm_joint_1.pos right_arm_joint_2.pos right_hand_grasp.pos
+right_arm_joint_1.pos right_arm_joint_2.pos right_arm_joint_3.pos
 ```
 
-실제 dataset을 Hub에 올릴 때는 `--dataset.push_to_hub=true --dataset.private=true`와 본인의
-`<HF_USER>/<DATASET_NAME>` repo ID를 사용합니다.
+`action`은 위 3축 뒤에 0–100% AmazingHand 명령을 추가한 4축입니다.
 
-현재 수집 계약은 J1·J2와 단일 full-grasp 세 축으로 고정합니다. J3–J5 또는 개별 손가락 축을 추가할
-경우 기존 dataset과 섞지 않고 별도의 action schema와 dataset 버전을 만들어야 합니다.
+```text
+right_arm_joint_1.pos right_arm_joint_2.pos right_arm_joint_3.pos right_hand_grasp.pos
+```
 
-저장되는 action은 Quest pose가 아니라 위의 J1·J2·grasp 관절 action이며, observation에는 같은 관절 상태와
-설정한 RGB 카메라 영상이 들어갑니다. 따라서 이 3축 schema를 유지한 채 LeRobot의 표준 ACT 학습 및
-정책 rollout 흐름을 사용할 수 있습니다.
+실제 dataset을 Hub에 올릴 때는 아래처럼 실행합니다.
+
+```bash
+DATASET_REPO_ID='<HF_USER>/<DATASET_NAME>' \
+PUSH_TO_HUB=true PRIVATE=true \
+./scripts/record_lerobot_8012_dataset.sh
+```
+
+저장되는 action은 Quest pose가 아니라 `q_cmd` J1/J2/J3와 Quest Trigger의
+`right_hand_grasp.pos`(0–100%)이고, `observation.state`는 CAN feedback에서 읽은 실물 `q_act`
+J1/J2/J3입니다. front/wrist RGB는 각각 `observation.images.front`와
+`observation.images.wrist`에 저장됩니다. AmazingHand에는 현재 실제 위치 feedback이 없으므로 명령값을
+observation state로 위장해 넣지 않습니다.
 
 ## 5. ACT 학습 예시
 
@@ -461,10 +550,10 @@ LeRobot 버전에 맞는 `lerobot-train`을 사용합니다.
 
 ```bash
 lerobot-train \
-  --dataset.repo_id=${HF_USER}/roboparty-j1-j2-amazing-hand \
+  --dataset.repo_id=${HF_USER}/roboparty-8012-j1-j2-j3 \
   --policy.type=act \
-  --output_dir=outputs/train/roboparty_j1_j2_hand_act \
-  --job_name=roboparty_j1_j2_hand_act \
+  --output_dir=outputs/train/roboparty_j1_j2_j3_act \
+  --job_name=roboparty_j1_j2_j3_act \
   --policy.device=mps
 ```
 
