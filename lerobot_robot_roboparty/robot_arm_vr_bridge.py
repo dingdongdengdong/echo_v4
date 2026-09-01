@@ -12,10 +12,21 @@ from typing import Any
 import numpy as np
 
 from .amazing_hand import HAND_SERVO_IDS, AmazingHandBus, FullGraspMapper
+from .parallel_gripper import (
+    DEFAULT_GRIPPER_BAUDRATE,
+    DEFAULT_GRIPPER_ID,
+    DEFAULT_GRIPPER_MAP,
+    DEFAULT_GRIPPER_TIMEOUT_S,
+    DEFAULT_MAX_DEG_PER_S,
+    ParallelGripperBus,
+    ParallelGripperCommandSink,
+    load_gripper_map,
+)
 from .can_probe import (
     DM4340P_POSITION_LIMIT_RAD,
     DM4340P_TORQUE_LIMIT_NM,
     DM4340P_VELOCITY_LIMIT_RAD_S,
+    parse_motor_ids,
     read_dm4340p_state,
 )
 from .j3_gain_profile import load_j3_gain_profile
@@ -44,6 +55,14 @@ DEFAULT_VELOCITY_SCALE = 0.16  # ≈ 0.03 rad/frame × 20 Hz ÷ 3.77 rad/s
 DEFAULT_KP = (120.0, 180.0)
 DEFAULT_KD = (2.5, 4.0)
 DEFAULT_MOTOR_SIGNS = (-1.0, 1.0, -1.0)
+# arm_v2 is a five-axis Damiao arm; the shortened arm this bridge grew up on
+# was two or three.  Anything outside this range is a config mix-up, not a
+# robot we can drive.
+SUPPORTED_DOF = (2, 3, 4, 5)
+# Signs, gains and the gripper zero are per-arm commissioning measurements.
+# The stored defaults were tuned on the short arm, so beyond three axes we
+# refuse to guess and make the operator state them.
+TUNED_DOF = (2, 3)
 DEFAULT_CAN_PORT = (
     "/dev/serial/by-id/"
     "usb-Openlight_Labs_CANable2_b158aa7_github.com_normaldotcom_canable2.git_"
@@ -474,8 +493,32 @@ def main() -> int:
     parser.add_argument(
         "--motor3-sign", type=float, choices=(-1.0, 1.0), default=DEFAULT_MOTOR_SIGNS[2]
     )
-    parser.add_argument("--kp", type=float, nargs=2, default=DEFAULT_KP)
-    parser.add_argument("--kd", type=float, nargs=2, default=DEFAULT_KD)
+    parser.add_argument(
+        "--motor-signs", type=float, nargs="+", default=None,
+        help="rotation sign per joint (+1/-1), one per DOF; required beyond three axes",
+    )
+    parser.add_argument(
+        "--motor-ids", type=parse_motor_ids, default=None,
+        help="CAN command IDs in joint order (default: 1..DOF)",
+    )
+    parser.add_argument("--kp", type=float, nargs="+", default=None)
+    parser.add_argument("--kd", type=float, nargs="+", default=None)
+    parser.add_argument("--gripper", action="store_true",
+                        help="drive the arm_v2 STS3215 parallel gripper from Command.grasp")
+    parser.add_argument("--gripper-port", default=None)
+    parser.add_argument("--gripper-id", type=int, default=DEFAULT_GRIPPER_ID)
+    parser.add_argument("--gripper-baudrate", type=int, default=DEFAULT_GRIPPER_BAUDRATE)
+    parser.add_argument("--gripper-timeout", type=float, default=DEFAULT_GRIPPER_TIMEOUT_S)
+    parser.add_argument("--gripper-map", type=Path, default=DEFAULT_GRIPPER_MAP)
+    parser.add_argument(
+        "--gripper-zero-deg", type=float, default=None,
+        help="servo angle reported when the gripper_map sweep reads 0 deg (measured)",
+    )
+    parser.add_argument(
+        "--gripper-sign", type=float, choices=(-1.0, 1.0), default=None,
+        help="servo rotation direction relative to the gripper_map sweep (measured)",
+    )
+    parser.add_argument("--gripper-max-deg-per-s", type=float, default=DEFAULT_MAX_DEG_PER_S)
     args = parser.parse_args()
     if args.velocity_scale <= 0 or args.rate <= 0 or args.motor_rate <= 0:
         parser.error("velocity scale, state rate, and motor rate must be positive")
@@ -483,18 +526,58 @@ def main() -> int:
         parser.error("hand baudrate/timeout must be positive and hand speed must be 1..6")
     ArmConfig, FakeJetson, ports = _load_robot_arm_vr()
     cfg = ArmConfig.load(args.config)
-    if cfg.dof not in (2, 3):
-        parser.error("robot_arm_vr config must contain J1/J2 or J1/J2/J3")
+    if cfg.dof not in SUPPORTED_DOF:
+        parser.error(
+            f"robot_arm_vr config has {cfg.dof} DOF; this bridge drives "
+            f"{'/'.join(str(value) for value in SUPPORTED_DOF)}"
+        )
+    if args.gripper and not args.no_hand:
+        parser.error("--gripper drives the arm_v2 wrist, which has no AmazingHand; add --no-hand")
+    if args.gripper and args.gripper_port is None:
+        parser.error("--gripper requires --gripper-port")
+    if args.gripper and (args.gripper_zero_deg is None or args.gripper_sign is None):
+        parser.error(
+            "--gripper requires --gripper-zero-deg and --gripper-sign; both are "
+            "commissioning measurements and there is no safe default"
+        )
     pf = ports(args.profile)
-    calibration = load_calibration(args.calibration)
-    motor_ids = tuple(range(1, cfg.dof + 1))
+    # Argument checks run before the calibration file is opened so a wrong axis
+    # count is reported as such instead of as a missing-file error.
+    motor_ids = tuple(args.motor_ids) if args.motor_ids else tuple(range(1, cfg.dof + 1))
+    if len(motor_ids) != cfg.dof:
+        parser.error(f"--motor-ids must list {cfg.dof} CAN IDs, one per joint")
     feedback_ids = tuple(motor_id + 0x10 for motor_id in motor_ids)
+    if args.motor_signs is not None:
+        if len(args.motor_signs) != cfg.dof:
+            parser.error(f"--motor-signs must list {cfg.dof} values, one per joint")
+        if any(sign not in (-1.0, 1.0) for sign in args.motor_signs):
+            parser.error("--motor-signs values must be +1 or -1")
+        signs = np.asarray(args.motor_signs, dtype=float)
+    elif cfg.dof in TUNED_DOF:
+        signs = np.asarray(
+            (args.motor1_sign, args.motor2_sign, args.motor3_sign)[: cfg.dof], dtype=float
+        )
+    else:
+        parser.error(
+            f"--motor-signs is required for {cfg.dof} axes; the stored defaults were "
+            "measured on the short J1/J2/J3 arm"
+        )
+    kp, kd = args.kp, args.kd
+    if kp is None or kd is None:
+        if cfg.dof not in TUNED_DOF:
+            parser.error(
+                f"--kp and --kd are required for {cfg.dof} axes; the stored gains were "
+                "tuned on the short J1/J2/J3 arm"
+            )
+        kp = list(DEFAULT_KP) if kp is None else list(kp)
+        kd = list(DEFAULT_KD) if kd is None else list(kd)
+    kp, kd = list(kp), list(kd)
+    # J3 alone reads its gains from a saved profile keyed to its calibration record.
+    expected_gains = cfg.dof - 1 if cfg.dof == 3 else cfg.dof
+    if len(kp) != expected_gains or len(kd) != expected_gains:
+        parser.error(f"--kp and --kd must each list {expected_gains} values")
+    calibration = load_calibration(args.calibration)
     calibration_motors = select_calibration_motors(calibration, motor_ids)
-    signs = np.asarray(
-        (args.motor1_sign, args.motor2_sign, args.motor3_sign)[: cfg.dof], dtype=float
-    )
-    kp = list(args.kp)
-    kd = list(args.kd)
     if cfg.dof == 3:
         j3_motor = calibration_motors[2]
         j3_kp, j3_kd = load_j3_gain_profile(
@@ -545,10 +628,25 @@ def main() -> int:
         args.hand_speed,
     )
     hand_sink = None if hand is None else AmazingHandCommandSink(hand)
+    gripper = None if not args.gripper else ParallelGripperBus(
+        args.gripper_port,
+        args.gripper_baudrate,
+        args.gripper_timeout,
+        args.gripper_id,
+    )
+    gripper_sink = None if gripper is None else ParallelGripperCommandSink(
+        gripper,
+        load_gripper_map(args.gripper_map),
+        zero_deg=args.gripper_zero_deg,
+        sign=args.gripper_sign,
+        max_deg_per_s=args.gripper_max_deg_per_s,
+    )
 
     try:
         if hand is not None:
             hand.connect()
+        if gripper is not None:
+            gripper.connect()
         jet.start()
         start_q = backend.start_q
         if start_q is None:
@@ -569,6 +667,19 @@ def main() -> int:
             f"velocity scale: {args.velocity_scale:.2f}; motor interpolation: "
             f"{args.motor_rate:.0f} Hz; motor IDs {list(motor_ids)} are used"
         )
+        if gripper is None:
+            print("parallel gripper: disabled (pass --gripper for arm_v2)")
+        else:
+            print(
+                f"parallel gripper: {args.gripper_port} @ {args.gripper_baudrate} "
+                f"ID {args.gripper_id}; zero {args.gripper_zero_deg:+.1f} deg "
+                f"sign {args.gripper_sign:+.0f}; slew limit "
+                f"{args.gripper_max_deg_per_s:.0f} deg/s"
+            )
+            print(
+                "parallel gripper has NO safety layer beyond this slew limit "
+                "(docs/68 §2.4) — first power-on with nothing between the jaws"
+            )
         if hand is None:
             print("AmazingHand: disabled (--no-hand)")
         else:
@@ -581,8 +692,21 @@ def main() -> int:
         previous_status = None
         last_stats_log_s = 0.0
         hand_failed = False
+        gripper_failed = False
         while True:
             time.sleep(0.02)
+            if gripper_sink is not None and not gripper_failed:
+                try:
+                    gripper_sink.forward(jet.last_cmd, time.monotonic())
+                except Exception as exc:
+                    gripper_failed = True
+                    with suppress(Exception):
+                        gripper.disconnect()
+                    print(
+                        f"parallel gripper disabled after command failure: "
+                        f"{type(exc).__name__}: {exc}",
+                        flush=True,
+                    )
             if hand_sink is not None and not hand_failed:
                 try:
                     hand_sink.forward(jet.last_cmd)
@@ -612,8 +736,11 @@ def main() -> int:
         if hand is not None:
             with suppress(Exception):
                 hand.disconnect()
+        if gripper is not None:
+            with suppress(Exception):
+                gripper.disconnect()
         backend.disconnect()
-        print("STOPPED arm and AmazingHand torque=disabled", flush=True)
+        print("STOPPED arm, AmazingHand and gripper torque=disabled", flush=True)
 
 
 if __name__ == "__main__":
