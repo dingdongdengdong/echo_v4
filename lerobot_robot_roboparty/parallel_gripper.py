@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import importlib.util
 import math
+import time
 from collections.abc import Sequence
 from contextlib import suppress
 from pathlib import Path
@@ -34,6 +35,11 @@ OPENING_PULLED_MM = 0.5
 DEFAULT_GRIPPER_ID = 1
 DEFAULT_GRIPPER_BAUDRATE = 1_000_000
 DEFAULT_GRIPPER_TIMEOUT_S = 0.5
+# A serial read on this bus times out now and then with nothing else wrong.
+# Treating the first one as a dead gripper would drop the jaws out of a session
+# that is otherwise healthy, so retry briefly before reporting failure.
+BUS_RETRIES = 3
+BUS_RETRY_DELAY_S = 0.01
 # The fitted sweep spans 110 deg; 165 deg/s crosses it in two thirds of a second,
 # which is brisk for teleoperation without being a slam.
 DEFAULT_MAX_DEG_PER_S = 165.0
@@ -77,7 +83,7 @@ def grasp_to_servo_deg(grasp: float, gripper_map: Any) -> float:
 
 
 class GripperController(Protocol):
-    def write_torque_enable(self, servo_id: int, enabled: int) -> None: ...
+    def write_torque_enable(self, servo_id: int, enabled: bool) -> None: ...
 
     def read_present_position(self, servo_id: int) -> float: ...
 
@@ -123,7 +129,7 @@ class ParallelGripperBus:
         if self._controller is not None:
             return
         controller = self._controller_factory(self.port, self.baudrate, self.timeout_s)
-        controller.write_torque_enable(self.servo_id, 1)
+        controller.write_torque_enable(self.servo_id, True)
         self._controller = controller
 
     def disconnect(self) -> None:
@@ -131,12 +137,28 @@ class ParallelGripperBus:
         if controller is None:
             return
         with suppress(Exception):
-            controller.write_torque_enable(self.servo_id, 0)
+            controller.write_torque_enable(self.servo_id, False)
+
+    def _retry(self, what: str, call):
+        """Run one bus transaction, retrying the transient serial failures."""
+        last: Exception | None = None
+        for attempt in range(BUS_RETRIES):
+            try:
+                return call()
+            except (RuntimeError, OSError) as exc:
+                last = exc
+                if attempt + 1 < BUS_RETRIES:
+                    time.sleep(BUS_RETRY_DELAY_S)
+        raise ConnectionError(
+            f"gripper {what} failed {BUS_RETRIES} times: {type(last).__name__}: {last}"
+        ) from last
 
     def read_position_rad(self) -> float:
         if self._controller is None:
             raise ConnectionError("gripper bus is not connected")
-        value = self._controller.read_present_position(self.servo_id)
+        value = self._retry(
+            "read", lambda: self._controller.read_present_position(self.servo_id)
+        )
         if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
             if len(value) != 1:
                 raise ConnectionError(f"expected one servo position, received {len(value)}")
@@ -148,7 +170,12 @@ class ParallelGripperBus:
             raise ConnectionError("gripper bus is not connected")
         if not math.isfinite(position_rad):
             raise ValueError("gripper position must be finite")
-        self._controller.write_goal_position(self.servo_id, float(position_rad))
+        self._retry(
+            "write",
+            lambda: self._controller.write_goal_position(
+                self.servo_id, float(position_rad)
+            ),
+        )
 
 
 class ParallelGripperCommandSink:

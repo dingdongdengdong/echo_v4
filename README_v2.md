@@ -316,21 +316,79 @@ measured on the short J1/J2/J3 arm
 
 2축·3축 호출은 기존 기본값과 플래그(`--motor1-sign` 등)가 그대로 동작합니다.
 
-### 5.6 그리퍼
+### 5.6 그리퍼 — 실측 완료 (2026-09-01)
 
-팔이 안정된 뒤 따로 붙이세요.
+**측정이 끝났습니다. 아래 값을 그대로 쓰면 됩니다.**
 
-```bash
-  --gripper --gripper-port /dev/<시리얼> \
-  --gripper-id <ID> \
-  --gripper-zero-deg <실측> --gripper-sign <+1 또는 -1>
+```
+포트   /dev/serial/by-id/usb-1a86_USB_Single_Serial_5A7A055962-if00
+ID     2               (기본값 1 이 아닙니다)
+모델   777             STS3215 확정
+영점   +28.535 deg
+부호   +1              bus 각이 커지면 조가 열립니다
 ```
 
-포트는 CAN이 아니라 시리얼입니다. `ls -l /dev/serial/by-id/`로 찾으세요.
+```bash
+  --gripper \
+  --gripper-port /dev/serial/by-id/usb-1a86_USB_Single_Serial_5A7A055962-if00 \
+  --gripper-id 2 --gripper-zero-deg 28.535 --gripper-sign +1
+```
 
-`--gripper-zero-deg`와 `--gripper-sign`은 `gripper_map`의 스윕 좌표(10~120°)를
-실물 서보 영점에 대응시키는 값입니다. **안전한 기본값이 없어서 명시하지 않으면
-거부합니다.**
+추종 검증 결과 — 12개 지점 전부 **±0.4°** 안에 들어옵니다.
+
+```
+  grasp 0.00  sweep target  120.0  actual  119.6  error  -0.4 deg
+  grasp 0.60  sweep target   71.8  actual   72.0  error  +0.2 deg
+  grasp 1.00  sweep target   27.4  actual   27.5  error  +0.1 deg
+  worst tracking error 0.4 deg
+  PASS the gripper follows the sweep
+```
+
+> 지금 그리퍼가 **AmazingHand 가 쓰던 어댑터**에 물려 있어서 udev 별칭이
+> `/dev/roboparty-hand` 입니다. 헷갈리지 않도록 `by-id` 전체 경로를 쓰세요.
+
+#### 직접 다시 재려면 — `roboparty-calibrate-gripper`
+
+```
+scan      버스에 응답하는 서보 ID 찾기
+read      토크 풀고 각도 실시간 표시
+jog       현재 위치 기준 상대 이동 (한 번에 최대 30°), 끝나면 토크 해제
+autozero  ★ 열림 스토퍼까지 스스로 밀어 영점·부호 산출 — 손 안 씀
+measure   손으로 양 끝을 잡아 산출
+verify    산출값으로 스윕 구동, 추종 오차 확인
+```
+
+**`autozero`가 가장 편합니다.** 사람이 조를 잡을 필요가 없습니다.
+
+```bash
+P=/dev/serial/by-id/usb-1a86_USB_Single_Serial_5A7A055962-if00
+
+.venv/bin/roboparty-calibrate-gripper --port $P --id 2 scan
+.venv/bin/roboparty-calibrate-gripper --port $P --id 2 jog --by 20      # 여는 방향 확인
+.venv/bin/roboparty-calibrate-gripper --port $P --id 2 autozero --open-sign 1
+.venv/bin/roboparty-calibrate-gripper --port $P --id 2 verify --zero-deg <값> --sign +1
+```
+
+조가 뚜껑에 막혀 손이 안 들어갈 때는 `jog`로 먼저 열어두면 됩니다. 현재 위치
+기준 상대 이동이라 영점을 모르는 상태에서도 안전하고, 끝나면 토크를 풀어
+손으로 만질 수 있게 둡니다.
+
+**닫힘 쪽이 아니라 열림 쪽 스토퍼를 씁니다.** 피팅이 저각도에서 단조가 아니라
+(서보 20° 에서 개구가 −0.27 mm 로 계산됨) 닫힘 끝은 기준이 못 됩니다. 조가
+맞닿는 지점이 서보 27° 근처고, 그 아래는 값이 무의미합니다.
+
+`autozero`는 탐색 중 토크 한도를 300으로 낮췄다가 되돌리고, 스토퍼를 찾으면
+3° 물러나 기댄 채로 두지 않습니다.
+
+#### 알아둘 것
+
+`--gripper-zero-deg`와 `--gripper-sign`은 **안전한 기본값이 없어서 명시하지
+않으면 브릿지가 거부합니다.**
+
+이 버스는 읽기가 이따금 타임아웃 납니다. 커미셔닝 도구는 응답을 1.0초까지
+기다리고(브릿지 기본 0.5초와 다릅니다 — 제어 루프를 막으면 안 되니까),
+`ParallelGripperBus`는 읽기·쓰기를 3회까지 재시도합니다. 재시도가 없으면
+일시적 타임아웃 한 번에 그리퍼가 세션 내내 죽습니다.
 
 > **팔에는 안전계층이 있지만 그리퍼에는 없습니다.**
 > [parallel_gripper.py](lerobot_robot_roboparty/parallel_gripper.py)가 최소한을
@@ -414,12 +472,24 @@ fatal: remote error: upload-pack: not our ref f33eaf7474...
 ### 미해결
 
 ```
-[ ] 그리퍼 서보 포트 · ID          (문서 어디에도 없음)
-[ ] 그리퍼 영점 · 부호              (실물 실측)
-[ ] 5축 부호 · kp/kd               (실물 실측)
-[ ] 그리퍼 파지력                   (미측정 — 가벼운 쓰레기가 대상이라 과하면 찌그러짐)
-[ ] 카메라를 link5 −x 로 이설할지    (기구 담당 판단)
+[x] 그리퍼 서보 포트 · ID          ID 2, usb-1a86_..._5A7A055962
+[x] 그리퍼 영점 · 부호              +28.535 deg, +1  (추종 오차 0.4°)
+[ ] 5축 부호 · kp/kd               실물 실측 — 모터 팀 진행 중
+[ ] 그리퍼 파지력                   미측정 — 가벼운 쓰레기가 대상이라 과하면 찌그러짐
+[ ] 카메라를 link5 −x 로 이설할지    기구 담당 판단
 ```
+
+### CAN 버스에 모터가 1개만 보임 (2026-09-01)
+
+ID 1~12 를 훑어도 **2번 하나만** 응답합니다. 5축 캘리브레이션은 5개가 다
+응답해야 진행됩니다.
+
+```
+HIT command=0x02 feedback=0x12 state=disabled position=+2.2967rad temperature=29/27C
+PASS received 1 CAN feedback frame(s)      ← "PASS" 는 통신이 살아있다는 뜻일 뿐
+```
+
+전원 · 배선 · 모터 ID 할당 중 하나입니다. 어댑터와 CAN 통신 자체는 정상입니다.
 
 ---
 
