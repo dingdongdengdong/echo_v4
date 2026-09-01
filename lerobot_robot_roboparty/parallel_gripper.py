@@ -32,6 +32,17 @@ DEFAULT_GRIPPER_MAP = (
 OPENING_RELEASED_MM = 57.9
 OPENING_PULLED_MM = 0.5
 
+# Measured on the built gripper, 2026-09-02: jogging closed past the sweep the
+# fit covers, the jaws meet and then start pressing on each other. Travel per
+# commanded degree falls off as they do -- 95% of a 5 deg step at sweep 27.5,
+# 79% of a 2 deg step at 22.8 -- and stalls around here.
+#
+# This is the mechanical floor, not a working setpoint. gripper_map cannot
+# describe anything below about 27 deg (it computes a negative opening at 20),
+# so past that there is no opening to speak of, only squeeze. Nothing should
+# command below this angle; grasp 1.0 stops at the fitted 27.4 deg.
+GRIP_CLOSED_SWEEP_DEG = 21.2
+
 DEFAULT_GRIPPER_ID = 1
 DEFAULT_GRIPPER_BAUDRATE = 1_000_000
 DEFAULT_GRIPPER_TIMEOUT_S = 0.5
@@ -76,10 +87,15 @@ def grasp_to_opening_mm(grasp: float) -> float:
 
 
 def grasp_to_servo_deg(grasp: float, gripper_map: Any) -> float:
-    """0..1 trigger pull to STS3215 angle, clamped to the fitted sweep."""
+    """0..1 trigger pull to STS3215 angle, clamped to the usable sweep.
+
+    The lower clamp is the measured mechanical floor rather than the fit's own
+    lower bound: the fit is defined down to 10 deg but stops meaning anything
+    below about 27, and the jaws physically stall near GRIP_CLOSED_SWEEP_DEG.
+    """
     servo = float(gripper_map.servo_for_opening(grasp_to_opening_mm(grasp)))
-    low, high = (float(value) for value in gripper_map.SERVO_RANGE_DEG)
-    return float(np.clip(servo, low, high))
+    _, high = (float(value) for value in gripper_map.SERVO_RANGE_DEG)
+    return float(np.clip(servo, GRIP_CLOSED_SWEEP_DEG, high))
 
 
 class GripperController(Protocol):
