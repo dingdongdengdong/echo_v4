@@ -6,4 +6,5 @@
 	url = https://github.com/huggingface/lerobot.git
 [submodule "third_party/robot_arm_vr"]
 	path = third_party/robot_arm_vr
-	url = https://github.com/dingdongdengdong/robot_arm_vr.git
+	url = https://github.com/beautifulmelon/echo_v4-robot_arm_vr.git
+	branch = work/arm-v2-gripper
